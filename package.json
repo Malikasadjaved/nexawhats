@@ -1,0 +1,88 @@
+{
+  "name": "nexawhats",
+  "version": "0.1.0",
+  "description": "Production-grade WhatsApp Web API for Node.js",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./store": {
+      "types": "./dist/store/index.d.ts",
+      "import": "./dist/store/index.js",
+      "require": "./dist/store/index.cjs"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/types/index.js",
+      "require": "./dist/types/index.cjs"
+    }
+  },
+  "files": ["dist", "LICENSE", "README.md"],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "Apache-2.0",
+  "author": "Malik Asad Javed Awan",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Malikasadjaved/nexawhats.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Malikasadjaved/nexawhats/issues"
+  },
+  "homepage": "https://github.com/Malikasadjaved/nexawhats#readme",
+  "keywords": [
+    "whatsapp",
+    "whatsapp-web",
+    "whatsapp-api",
+    "whatsapp-bot",
+    "baileys",
+    "signal-protocol",
+    "websocket",
+    "chat-bot",
+    "messaging"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "async-mutex": "^0.5.0",
+    "lru-cache": "^11.0.0",
+    "pino": "^9.0.0",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "protobufjs": "^7.4.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "peerDependencies": {
+    "better-sqlite3": ">=11.0.0"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    }
+  }
+}
