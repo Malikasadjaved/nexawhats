@@ -10,10 +10,47 @@ export * from './errors/index.js';
 // Store
 export { type AuthStore, storeToAuthState } from './store/interface.js';
 export { MemoryAuthStore } from './store/memory.js';
+export { FileAuthStore } from './store/file.js';
+export {
+  SQLiteAuthStore,
+  type SQLiteAuthStoreOptions,
+} from './store/sqlite.js';
+export {
+  migrateFromBaileys,
+  type MigrationResult,
+} from './store/migrate.js';
+export { encodeAuthValue, decodeAuthValue } from './store/serialize.js';
+
+// Observability
+export {
+  NexaWhatsMetrics,
+  type NexaWhatsMetricsOptions,
+  HealthServer,
+  type HealthServerOptions,
+  type HealthSnapshot,
+} from './observability/index.js';
 
 // Socket
 export { ConnectionStateMachine } from './socket/state-machine.js';
 export { CircuitBreaker } from './socket/circuit-breaker.js';
+export {
+  WsTransport,
+  DEFAULT_WS_ORIGIN,
+  type WsTransportOptions,
+  type WsTransportState,
+} from './socket/transport.js';
+export {
+  makeNoiseHandler,
+  CertificateMismatchError,
+  NOISE_MODE,
+  NOISE_WA_HEADER,
+  WA_CERT_DETAILS,
+  type NoiseHandler,
+  type MakeNoiseHandlerOptions,
+  type NoiseHandshakeMessage,
+  type NoiseServerHello,
+  type RoutingInfo,
+} from './socket/noise.js';
 
 // Queue
 export { MessageQueue, RateLimiter, DeadLetterQueue } from './queue/index.js';
@@ -48,11 +85,27 @@ export type { BinaryNode } from './binary/types.js';
 export {
   encodeBinaryNode,
   decodeBinaryNode,
+  decodeBinaryNodeSync,
+  decodeBinaryNodes,
+  decompressingIfRequired,
   findChildNode,
   findChildNodes,
   hasChildNodes,
   getTextContent,
   getBinaryContent,
+  getAllBinaryNodeChildren,
+  getBinaryNodeChildren,
+  getBinaryNodeChild,
+  getBinaryNodeChildBuffer,
+  getBinaryNodeChildString,
+  getBinaryNodeChildUInt,
+  assertNodeErrorFree,
+  reduceBinaryNodeToDictionary,
+  binaryNodeToString,
+  TAGS,
+  SINGLE_BYTE_TOKENS,
+  DOUBLE_BYTE_TOKENS,
+  TOKEN_MAP,
 } from './binary/index.js';
 
 // Signal
@@ -69,13 +122,39 @@ export {
   isJidNewsletter,
   isLidUser,
   isJidUser,
+  isPnUser,
+  isJidMetaAI,
+  isJidBot,
+  isJidStatusBroadcast,
+  isHostedPnUser,
+  isHostedLidUser,
   phoneFromJid,
   areJidsSameUser,
+  transferDevice,
+  getServerFromDomainType,
 } from './utils/jid.js';
 export { retry, sleep, calculateBackoff } from './utils/retry.js';
-export { generateMessageId } from './utils/crypto.js';
+export {
+  generateMessageId,
+  generateRandomBytes,
+  hkdf,
+  hmacSha256,
+  hmacSign,
+  sha1,
+  sha256,
+  md5,
+  aesEncrypt,
+  aesDecrypt,
+  aesEncryptGCM,
+  aesDecryptGCM,
+  Curve,
+  type RawKeyPair,
+} from './utils/crypto.js';
 export { createLogger, defaultLogger, silentLogger } from './utils/logger.js';
 export { getPlatform, getDefaultDataDir } from './utils/platform.js';
 
-// Proto (placeholder — full WAProto in Phase 1)
-export type { proto } from './proto/index.js';
+// Proto — dynamic WAProto bridge over optional `@whiskeysockets/baileys` dep.
+// `proto` is a runtime proxy; consumers wanting strict protobuf types
+// should import them directly from `@whiskeysockets/baileys`.
+export { proto, isProtoAvailable, loadProto } from './proto/index.js';
+export type { protoTypes } from './proto/index.js';

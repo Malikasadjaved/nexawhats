@@ -1,0 +1,44 @@
+{
+  "keyPair": {
+    "private": "008dfc5bd0a9863cb03b2a98d817e0317282a1d1975e3cab25687894de58a45e",
+    "public": "c927b63d6f2cc18b904080742abb274372d480a68f4936d829b680d7d1bdf023"
+  },
+  "steps": [
+    {
+      "op": "authenticate",
+      "data": "6e65786177686174732d666978747572652d626c6f622d31"
+    },
+    {
+      "op": "mixIntoKey",
+      "data": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "op": "encrypt",
+      "plaintext": "68656c6c6f2066726f6d206e6578617768617473",
+      "ciphertext": "6c6f9fff7c3c46a76975739611628862be3c6b0ef07d7c394d9dd23dddc21cae9a366cba"
+    },
+    {
+      "op": "encodeFrame",
+      "data": "7072656672616d65",
+      "frame": "574106030000087072656672616d65"
+    },
+    {
+      "op": "encodeFrame",
+      "data": "7072656672616d6532",
+      "frame": "0000097072656672616d6532"
+    },
+    {
+      "op": "finishInit"
+    },
+    {
+      "op": "encodeFrame",
+      "data": "706f73746672616d65",
+      "frame": "000019e28ea6b56ace6203cb4668326009b604ec16554ea3e1ca8caa"
+    },
+    {
+      "op": "encodeFrame",
+      "data": "706f73746672616d6532",
+      "frame": "00001a473ea0b4fb7e5faae7e244d2e04e47f7dea9ea2c3c3d893eb553"
+    }
+  ]
+}
