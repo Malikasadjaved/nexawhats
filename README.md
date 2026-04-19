@@ -10,6 +10,33 @@
 
 NexaWhats is a complete rewrite of the WhatsApp Web API layer, built on top of battle-tested protocol code. It fixes the critical production issues in existing libraries while providing a modern, type-safe, and extensible API.
 
+## Status — v0.1.0 (alpha)
+
+This release ships the infrastructure layer end-to-end, with the live
+protocol layer still in active development. You can use it **today** for:
+
+- **Pluggable auth storage** — `SQLiteAuthStore`, `FileAuthStore`,
+  `MemoryAuthStore` with atomic writes and a one-call
+  `migrateFromBaileys()` utility.
+- **Binary codec** — full WhatsApp binary-XML encode/decode with token
+  compression, JID packing, nibble/hex string encoding (188 tests).
+- **Connection primitives** — state machine + circuit breaker + retry
+  helpers (Phase 2, fully tested).
+- **Message queue** — token-bucket rate limiter, priority queue,
+  dead-letter queue, human-like timing (Phase 4).
+- **Middleware pipeline** — Koa-style `use()`, LID resolver, anti-ban
+  logger (Phase 5).
+- **Observability** — Prometheus metrics + `/health` and `/metrics`
+  endpoints (Phase 7).
+
+Still in progress (`0.2.0`): full Noise handshake + Signal Protocol
+integration, `sendMessage`/`recvMessage`, group operations. Until those
+land, `client.connect()` sets up transport + health server but does not
+yet establish a live WhatsApp session — treat this release as a drop-in
+replacement for Baileys' `useMultiFileAuthState` plus a toolkit of
+reusable primitives. See `examples/migrate-from-baileys/` for the
+recommended migration path.
+
 ## Why NexaWhats?
 
 - **Rock-solid connections** — State machine + circuit breaker handles every WhatsApp disconnect (401/403/405/463/515) automatically

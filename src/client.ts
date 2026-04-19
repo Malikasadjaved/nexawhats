@@ -2,6 +2,11 @@ import { EventEmitter } from 'node:events';
 import { extractText, isGroupMessage } from './messages/receive.js';
 import { MessageSender } from './messages/send.js';
 import { type Context, type Middleware, MiddlewarePipeline } from './middleware/index.js';
+import {
+  HealthServer,
+  type HealthSnapshot,
+  NexaWhatsMetrics,
+} from './observability/index.js';
 import { MessageQueue } from './queue/index.js';
 import { CircuitBreaker } from './socket/circuit-breaker.js';
 import { ConnectionStateMachine } from './socket/state-machine.js';
@@ -43,23 +48,37 @@ export class NexaWhatsClient extends EventEmitter {
   readonly queue: MessageQueue;
   readonly sender: MessageSender;
   readonly middleware: MiddlewarePipeline;
+  readonly metrics: NexaWhatsMetrics;
+  private healthServer: HealthServer | null = null;
+  private readonly startedAt = Date.now();
   private store: AuthStore | null = null;
 
   constructor(config: ClientConfig) {
     super();
     this.config = config;
 
+    // Initialize metrics (disabled by default — zero overhead).
+    this.metrics = new NexaWhatsMetrics({
+      enabled: config.metrics?.prometheus ?? false,
+    });
+
     // Initialize connection state machine
     this.connection = new ConnectionStateMachine();
     this.connection.on('transition', (_from, to) => {
+      this.metrics.setConnectionState(to);
       this.emit('connection.update', {
         connection: to,
       } satisfies Partial<ConnectionState>);
     });
+    // Seed the gauge to match initial state.
+    this.metrics.setConnectionState(this.connection.state);
 
     // Initialize circuit breaker
     this.circuitBreaker = new CircuitBreaker(config.circuitBreaker);
     this.circuitBreaker.on('state-change', (event) => {
+      // Event shape is { state: 'closed' | 'open' | 'half-open', ... }
+      const next = (event as { state?: string }).state;
+      if (next) this.metrics.setCircuitBreakerState(next);
       this.emit('circuit-breaker.state-change', event);
     });
 
@@ -108,13 +127,23 @@ export class NexaWhatsClient extends EventEmitter {
   /**
    * Connect to WhatsApp.
    *
-   * This is a placeholder that will be implemented in Phase 2+6
-   * when we have the full Noise handshake + socket layer.
+   * Phase 7 wires up observability here (health + metrics). The Noise
+   * handshake + WebSocket negotiation are Track B (Phase 6b).
    */
   async connect(): Promise<void> {
     this.connection.transition('connecting');
-    // Phase 2+6: Noise handshake, WebSocket connect, auth exchange
-    // For now, just transition to show the state machine works
+
+    // Start the health server if configured.
+    if (this.config.metrics?.prometheus && this.config.metrics.port) {
+      this.healthServer = new HealthServer({
+        port: this.config.metrics.port,
+        getSnapshot: () => this.snapshot(),
+        metrics: this.metrics,
+      });
+      await this.healthServer.start();
+    }
+
+    // Phase 6b: Noise handshake, WebSocket connect, auth exchange
   }
 
   /**
@@ -125,6 +154,25 @@ export class NexaWhatsClient extends EventEmitter {
       this.connection.reset();
     }
     this.queue.clear();
+    if (this.healthServer) {
+      await this.healthServer.stop();
+      this.healthServer = null;
+    }
+  }
+
+  /** Snapshot of runtime state for /health. */
+  snapshot(): HealthSnapshot {
+    const state = this.connection.state;
+    const status: HealthSnapshot['status'] =
+      state === 'connected' ? 'ok' : state === 'disconnected' ? 'down' : 'degraded';
+    return {
+      status,
+      connection: state,
+      queueDepth: this.queue.depth,
+      circuitBreaker: this.circuitBreaker.state,
+      uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
+      timestamp: new Date().toISOString(),
+    };
   }
 
   /**

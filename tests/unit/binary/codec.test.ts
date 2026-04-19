@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { decodeBinaryNode, decodeBinaryNodes } from '../../../src/binary/decoder.js';
-import { encodeBinaryNode, encodeBinaryNodes } from '../../../src/binary/encoder.js';
+import { encodeBinaryNode } from '../../../src/binary/encoder.js';
+import { decodeDecompressedBinaryNode } from '../../../src/binary/decoder.js';
 import {
   findChildNode,
   findChildNodes,
@@ -10,14 +10,20 @@ import {
 } from '../../../src/binary/types.js';
 import type { BinaryNode } from '../../../src/binary/types.js';
 
+/** Helper: encode → strip prefix → decode */
+function roundTrip(node: BinaryNode): BinaryNode {
+  const encoded = encodeBinaryNode(node);
+  const withoutPrefix = Buffer.from(encoded.subarray(1));
+  return decodeDecompressedBinaryNode(withoutPrefix);
+}
+
 describe('BinaryNode encode/decode round-trip', () => {
   it('should round-trip a simple node', () => {
     const node: BinaryNode = {
       tag: 'message',
       attrs: { to: '123@s.whatsapp.net', type: 'text' },
     };
-    const encoded = encodeBinaryNode(node);
-    const decoded = decodeBinaryNode(encoded);
+    const decoded = roundTrip(node);
     expect(decoded.tag).toBe('message');
     expect(decoded.attrs.to).toBe('123@s.whatsapp.net');
     expect(decoded.attrs.type).toBe('text');
@@ -29,23 +35,24 @@ describe('BinaryNode encode/decode round-trip', () => {
       attrs: {},
       content: 'Hello, world!',
     };
-    const encoded = encodeBinaryNode(node);
-    const decoded = decodeBinaryNode(encoded);
+    const decoded = roundTrip(node);
     expect(decoded.tag).toBe('body');
-    expect(decoded.content).toBe('Hello, world!');
+    // Wire format uses BINARY_8 for raw strings — decoded as Buffer, use getTextContent()
+    expect(getTextContent(decoded)).toBe('Hello, world!');
   });
 
   it('should round-trip a node with binary content', () => {
-    const data = new Uint8Array([0x01, 0x02, 0x03, 0xff]);
+    const data = Buffer.from([0x01, 0x02, 0x03, 0xff]);
     const node: BinaryNode = {
       tag: 'media',
       attrs: { type: 'image' },
       content: data,
     };
-    const encoded = encodeBinaryNode(node);
-    const decoded = decodeBinaryNode(encoded);
+    const decoded = roundTrip(node);
     expect(decoded.tag).toBe('media');
-    expect(getBinaryContent(decoded)).toEqual(data);
+    const content = getBinaryContent(decoded);
+    expect(content).toBeDefined();
+    expect(Buffer.from(content!)).toEqual(data);
   });
 
   it('should round-trip a node with child nodes', () => {
@@ -57,8 +64,7 @@ describe('BinaryNode encode/decode round-trip', () => {
         { tag: 'status', attrs: { code: '200' } },
       ],
     };
-    const encoded = encodeBinaryNode(node);
-    const decoded = decodeBinaryNode(encoded);
+    const decoded = roundTrip(node);
     expect(decoded.tag).toBe('iq');
     expect(hasChildNodes(decoded)).toBe(true);
     if (hasChildNodes(decoded)) {
@@ -68,16 +74,15 @@ describe('BinaryNode encode/decode round-trip', () => {
     }
   });
 
-  it('should round-trip multiple nodes', () => {
-    const nodes: BinaryNode[] = [
-      { tag: 'a', attrs: { id: '1' } },
-      { tag: 'b', attrs: { id: '2' }, content: 'text' },
-    ];
-    const encoded = encodeBinaryNodes(nodes);
-    const decoded = decodeBinaryNodes(encoded);
-    expect(decoded).toHaveLength(2);
-    expect(decoded[0].tag).toBe('a');
-    expect(decoded[1].tag).toBe('b');
+  it('should round-trip a node with no content', () => {
+    const node: BinaryNode = {
+      tag: 'ack',
+      attrs: { id: 'test123' },
+    };
+    const decoded = roundTrip(node);
+    expect(decoded.tag).toBe('ack');
+    expect(decoded.attrs.id).toBe('test123');
+    expect(decoded.content).toBeUndefined();
   });
 });
 
