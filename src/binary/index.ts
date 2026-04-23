@@ -33,3 +33,31 @@ export {
 // Constants
 export { TAGS, SINGLE_BYTE_TOKENS, DOUBLE_BYTE_TOKENS, TOKEN_MAP } from './constants.js';
 export type { TokenEntry } from './constants.js';
+
+// JID utilities
+export {
+  S_WHATSAPP_NET,
+  OFFICIAL_BIZ_JID,
+  SERVER_JID,
+  PSA_WID,
+  STORIES_JID,
+  META_AI_JID,
+  WAJIDDomains,
+  getServerFromDomainType,
+  jidEncode,
+  jidDecode,
+  areJidsSameUser,
+  isJidMetaAI,
+  isPnUser,
+  isLidUser,
+  isJidBroadcast,
+  isJidGroup,
+  isJidStatusBroadcast,
+  isJidNewsletter,
+  isHostedPnUser,
+  isHostedLidUser,
+  isJidBot,
+  jidNormalizedUser,
+  transferDevice,
+} from './jid.js';
+export type { JidDecoded } from './jid.js';

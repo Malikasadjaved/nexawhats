@@ -66,6 +66,7 @@
   "dependencies": {
     "@hapi/boom": "^10.0.1",
     "async-mutex": "^0.5.0",
+    "libsignal": "git+https://github.com/whiskeysockets/libsignal-node",
     "lru-cache": "^11.0.0",
     "pino": "^9.0.0",
     "prom-client": "^15.1.3",

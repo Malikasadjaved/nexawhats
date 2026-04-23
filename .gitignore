@@ -137,3 +137,10 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Signal/auth capture — NEVER commit live WhatsApp auth creds or full fixture
+# JSONs (they embed private keys). Only sanitized fixtures get committed by
+# hand via `git add -f tests/fixtures/signal/<name>.json`.
+tests/fixtures/auth-capture/
+tests/fixtures/signal/*.raw.json
+tests/fixtures/signal/*.local.json

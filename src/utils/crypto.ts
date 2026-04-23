@@ -256,3 +256,22 @@ export const Curve = {
     );
   },
 };
+
+/**
+ * Signal protocol version byte prefixed to public keys in several
+ * contexts (pre-key bundles, sender-key distribution messages).
+ * Baileys calls this KEY_BUNDLE_TYPE and uses the single byte 0x05.
+ */
+export const KEY_BUNDLE_TYPE = Buffer.from([5]);
+
+/**
+ * Prefix the Signal version byte to a raw 32-byte public key, producing
+ * the 33-byte form libsignal expects. If the input is already 33 bytes,
+ * it is returned unchanged.
+ *
+ * Ported verbatim from Baileys' generateSignalPubKey helper.
+ */
+export const generateSignalPubKey = (pubKey: Buffer | Uint8Array): Buffer =>
+  pubKey.length === 33
+    ? Buffer.from(pubKey)
+    : Buffer.concat([KEY_BUNDLE_TYPE, Buffer.from(pubKey)]);
