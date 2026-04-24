@@ -109,7 +109,16 @@ export {
 } from './binary/index.js';
 
 // Signal
-export type { SignalRepository } from './signal/repository.js';
+export type {
+  E2ESession,
+  SenderKeyDistributionItem,
+  SessionMigrationResult,
+  SessionValidationResult,
+  SignalRepository,
+  SignalSessionCiphertext,
+} from './signal/libsignal.js';
+export { jidToSignalProtocolAddress, makeLibSignalRepository } from './signal/libsignal.js';
+export { LIDMappingStore, type LIDPNPair, type PnToLidFunc } from './signal/lid-mapping.js';
 export { CacheableSignalKeyStore } from './signal/keys.js';
 
 // Utils

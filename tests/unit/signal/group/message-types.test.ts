@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { isProtoAvailable, loadProto } from '../../../../src/proto/index.js';
 import {
   CiphertextMessage,
   SenderKeyDistributionMessage,
@@ -10,13 +9,10 @@ import {
 
 const fixturePath = resolve(__dirname, '../../../fixtures/signal/senderkey.local.json');
 const haveFixture = existsSync(fixturePath);
-const haveProto = isProtoAvailable();
 
-// These tests require both the Baileys-captured fixture and a working
-// `proto` bridge (Baileys installed at runtime). Both conditions hold
-// in local dev; the suite is skipped cleanly in environments that
-// lack either.
-const describeIf = haveFixture && haveProto ? describe : describe.skip;
+// These tests require the Baileys-captured fixture. In environments
+// that lack it the suite skips cleanly.
+const describeIf = haveFixture ? describe : describe.skip;
 
 describe('CiphertextMessage protocol constants', () => {
   it('matches the Signal protocol wire-format type IDs', () => {
@@ -30,24 +26,13 @@ describe('CiphertextMessage protocol constants', () => {
 });
 
 describeIf('SenderKeyDistributionMessage — parse Baileys senderkey fixture', () => {
-  // The fixture's `axolotlSenderKeyDistributionMessage` hex field is
-  // actually the full `proto.Message` envelope — the capture script
-  // serialized `opts.item.axolotlSenderKeyDistributionMessage.buffer`
-  // instead of the inner bytes. Extract the real axolotl bytes here.
-  function extractAxolotlBytes(): Buffer {
+  // The capture script records the raw axolotl bytes directly (version
+  // byte 0x33 + protobuf body). No envelope unwrapping required.
+  function readAxolotlBytes(): Buffer {
     const fx = JSON.parse(readFileSync(fixturePath, 'utf-8'));
-    const wrapper = Buffer.from(fx.input.axolotlSenderKeyDistributionMessage, 'hex');
-    const proto = loadProto() as {
-      Message: {
-        decode(b: Buffer): {
-          senderKeyDistributionMessage: { axolotlSenderKeyDistributionMessage: Uint8Array };
-        };
-      };
-    };
-    const decoded = proto.Message.decode(wrapper);
-    return Buffer.from(decoded.senderKeyDistributionMessage.axolotlSenderKeyDistributionMessage);
+    return Buffer.from(fx.input.axolotlSenderKeyDistributionMessage, 'hex');
   }
-  const bytes = haveFixture && haveProto ? extractAxolotlBytes() : Buffer.alloc(0);
+  const bytes = haveFixture ? readAxolotlBytes() : Buffer.alloc(0);
 
   it('decodes version byte + protobuf body without throwing', () => {
     expect(bytes.length).toBeGreaterThan(0);

@@ -32,6 +32,24 @@
 // SAFETY NOTE: The emitted fixtures embed fragments of auth state (session
 // bytes, sender keys). Do NOT commit the raw `.local.json` files — only
 // curated fixtures where you've stripped any non-test identifiers.
+//
+// PRE-STATE SNAPSHOTS (D4.5 replay requirement)
+// ─────────────────────────────────────────────
+// For byte-identical replay we need the auth state EXACTLY as it was BEFORE
+// the real Baileys call mutated it. This harness:
+//   • snapshots (pre-key, session, signed-pre-key, sender-key) BEFORE calling
+//     real.decryptMessage / decryptGroupMessage / processSenderKeyDistributionMessage,
+//   • computes the correct storage keys via jidToSignalProtocolAddress and
+//     SenderKeyName (the previous version keyed sender-key by the raw groupId,
+//     which never matched — snapshots came back as empty `{}`),
+//   • also snapshots the `after` state so replay assertions can verify side
+//     effects (e.g. SKDM storing a new sender key).
+//
+// Replay in tests/unit/signal/repository.test.ts:
+//   const store = hydrateFromSnapshot(fixture.authSnapshot.before, fixture.meta.creds)
+//   const repo  = makeLibSignalRepository({ creds, keys: store }, silentLogger)
+//   const out   = await repo.decryptMessage(fixture.input)
+//   expect(out.toString('hex')).toBe(fixture.output.plaintext)
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -80,6 +98,34 @@ const {
 // shim we `req()` above already gives it back flat, but handle both shapes.
 const wasocket = typeof makeWASocket === 'function' ? makeWASocket : baileys.makeWASocket;
 
+// Signal helpers — borrow the real implementations so storage-key computation
+// is bit-identical to what Baileys writes.
+const { makeLibSignalRepository } = req('@whiskeysockets/baileys/lib/Signal/libsignal.js');
+const { SenderKeyName } = req('@whiskeysockets/baileys/lib/Signal/Group/sender-key-name.js');
+const wabinary = req('@whiskeysockets/baileys/lib/WABinary/index.js');
+const { jidDecode, WAJIDDomains } = wabinary;
+const libsignal = req('libsignal');
+
+// Re-implement jidToSignalProtocolAddress locally so we can generate the exact
+// session/storage key Baileys uses without reaching into its non-exported
+// internals.
+function jidToSignalProtocolAddress(jid) {
+  const decoded = jidDecode(jid);
+  if (!decoded) throw new Error(`Could not decode JID: "${jid}"`);
+  const { user, device, server, domainType } = decoded;
+  if (!user) throw new Error(`JID decoded but user is empty: "${jid}"`);
+  const signalUser = domainType !== WAJIDDomains.WHATSAPP ? `${user}_${domainType}` : user;
+  const finalDevice = device || 0;
+  if (device === 99 && server !== 'hosted' && server !== 'hosted.lid') {
+    throw new Error(`Unexpected non-hosted device JID with device 99: ${jid}`);
+  }
+  return new libsignal.ProtocolAddress(signalUser, finalDevice);
+}
+
+function jidToSignalSenderKeyName(group, user) {
+  return new SenderKeyName(group, jidToSignalProtocolAddress(user));
+}
+
 // Silent logger (pino-compatible shape Baileys needs internally)
 const silentLogger = {
   child: () => silentLogger,
@@ -126,19 +172,28 @@ function writeFixture(category, payload) {
 // ── Wrapped signal repository factory ─────────────────────────────────────────
 // Baileys will call this with (auth, logger, pnToLIDFunc). We delegate to the
 // real makeLibSignalRepository and proxy every method to record I/O.
-const { makeLibSignalRepository } = req('@whiskeysockets/baileys/lib/Signal/libsignal.js');
-
 function makeCapturingSignalRepository(auth, logger, pnToLIDFunc) {
   const real = makeLibSignalRepository(auth, logger, pnToLIDFunc);
 
-  // Snapshot a minimal slice of auth state so fixtures are self-contained
-  // enough to replay. We copy signed/pre keys and any relevant session IDs
-  // via the existing AuthStore get() API.
-  async function snapshotKeys(types, ids) {
+  // Pull a targeted slice of the auth store. Returns a plain object shape:
+  //   { [type]: { [id]: value|null } }
+  // where missing ids show up as `null` so the replay hydrator can tell
+  // "not present" from "present but empty".
+  async function snapshotKeys(spec) {
     const out = {};
-    for (const t of types) {
+    for (const [t, ids] of Object.entries(spec)) {
+      const uniq = Array.from(new Set(ids.filter((x) => x != null)));
+      if (uniq.length === 0) {
+        out[t] = {};
+        continue;
+      }
       try {
-        out[t] = await auth.keys.get(t, ids);
+        const got = await auth.keys.get(t, uniq);
+        const normalized = {};
+        for (const id of uniq) {
+          normalized[id] = got[id] ?? null;
+        }
+        out[t] = normalized;
       } catch (err) {
         out[t] = { __error: err.message };
       }
@@ -146,19 +201,52 @@ function makeCapturingSignalRepository(auth, logger, pnToLIDFunc) {
     return out;
   }
 
-  const toHex = (buf) =>
-    buf && typeof buf === 'object' ? Buffer.from(buf.buffer ?? buf).toString('hex') : String(buf);
+  // Hex-encode a Buffer/Uint8Array. Previous implementation did
+  // `Buffer.from(buf.buffer ?? buf)` which, for a Node Buffer, returns the
+  // ENTIRE underlying ArrayBuffer pool (8KB+ of unrelated memory) instead of
+  // the actual byte window. `Buffer.from(b)` on a Buffer/Uint8Array copies
+  // only the window.
+  const toHex = (buf) => {
+    if (buf == null) return String(buf);
+    if (Buffer.isBuffer(buf) || buf instanceof Uint8Array) {
+      return Buffer.from(buf).toString('hex');
+    }
+    // Legacy { type: 'Buffer', data: [...] } shape
+    if (typeof buf === 'object' && Array.isArray(buf.data)) {
+      return Buffer.from(buf.data).toString('hex');
+    }
+    return String(buf);
+  };
+
+  // Extract pre-key IDs that libsignal will load while decrypting a pkmsg.
+  // We don't know which yet — snapshot ALL pre-keys listed in creds so the
+  // fixture is self-contained. (Baileys' PreKey store is keyed by numeric id
+  // as string.)
+  async function allPreKeyIds() {
+    try {
+      const nextId = auth.creds?.nextPreKeyId ?? 0;
+      const firstId = 1;
+      const ids = [];
+      for (let i = firstId; i < nextId; i++) ids.push(String(i));
+      return ids;
+    } catch {
+      return [];
+    }
+  }
 
   return {
     ...real,
 
     async decryptMessage(opts) {
       const t0 = Date.now();
+      const addr = jidToSignalProtocolAddress(opts.jid).toString();
+      const spec = {
+        session: [addr, opts.jid],
+        'pre-key': opts.type === 'pkmsg' ? await allPreKeyIds() : [],
+      };
+      const before = await snapshotKeys(spec);
       const plaintext = await real.decryptMessage(opts);
-      const keys = await snapshotKeys(
-        ['pre-key', 'session', 'signed-pre-key'],
-        [opts.jid.split('@')[0], opts.jid],
-      );
+      const after = await snapshotKeys(spec);
       const category = opts.type === 'pkmsg' ? 'pkmsg' : 'msg';
       writeFixture(category, {
         capturedAt: new Date().toISOString(),
@@ -169,7 +257,8 @@ function makeCapturingSignalRepository(auth, logger, pnToLIDFunc) {
           ciphertext: toHex(opts.ciphertext),
         },
         output: { plaintext: toHex(plaintext) },
-        authSnapshot: keys,
+        authSnapshot: { before, after },
+        signalAddress: addr,
         meta: {
           ourJid: auth.creds?.me?.id ?? null,
           registrationId: auth.creds?.registrationId ?? null,
@@ -180,11 +269,11 @@ function makeCapturingSignalRepository(auth, logger, pnToLIDFunc) {
 
     async decryptGroupMessage(opts) {
       const t0 = Date.now();
+      const senderKeyId = jidToSignalSenderKeyName(opts.group, opts.authorJid).toString();
+      const spec = { 'sender-key': [senderKeyId] };
+      const before = await snapshotKeys(spec);
       const plaintext = await real.decryptGroupMessage(opts);
-      const keys = await snapshotKeys(
-        ['sender-key'],
-        [`${opts.group}::${opts.authorJid}`, opts.group],
-      );
+      const after = await snapshotKeys(spec);
       writeFixture('msg', {
         capturedAt: new Date().toISOString(),
         elapsedMs: Date.now() - t0,
@@ -195,15 +284,21 @@ function makeCapturingSignalRepository(auth, logger, pnToLIDFunc) {
           ciphertext: toHex(opts.msg),
         },
         output: { plaintext: toHex(plaintext) },
-        authSnapshot: keys,
+        authSnapshot: { before, after },
+        senderKeyId,
       });
       return plaintext;
     },
 
     async processSenderKeyDistributionMessage(opts) {
-      const before = await snapshotKeys(['sender-key'], [opts.item.groupId]);
+      const senderKeyId = jidToSignalSenderKeyName(
+        opts.item.groupId,
+        opts.authorJid,
+      ).toString();
+      const spec = { 'sender-key': [senderKeyId] };
+      const before = await snapshotKeys(spec);
       await real.processSenderKeyDistributionMessage(opts);
-      const after = await snapshotKeys(['sender-key'], [opts.item.groupId]);
+      const after = await snapshotKeys(spec);
       writeFixture('senderkey', {
         capturedAt: new Date().toISOString(),
         input: {
@@ -212,6 +307,7 @@ function makeCapturingSignalRepository(auth, logger, pnToLIDFunc) {
           axolotlSenderKeyDistributionMessage: toHex(opts.item.axolotlSenderKeyDistributionMessage),
         },
         authSnapshot: { before, after },
+        senderKeyId,
       });
     },
   };

@@ -14,8 +14,7 @@ function stubCreds(): AuthenticationCreds {
     },
     signedIdentityKey: { public: Buffer.from([5]), private: Buffer.from([6]) },
     signedPreKey: {
-      public: Buffer.from([7]),
-      private: Buffer.from([8]),
+      keyPair: { public: Buffer.from([7]), private: Buffer.from([8]) },
       signature: Buffer.from([9]),
       keyId: 42,
     },

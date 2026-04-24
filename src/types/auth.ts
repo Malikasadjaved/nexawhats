@@ -4,8 +4,9 @@ export interface KeyPair {
   private: Uint8Array;
 }
 
-/** Signed key pair with signature and key ID */
-export interface SignedKeyPair extends KeyPair {
+/** Signed key pair with signature and key ID. Shape matches Baileys: `keyPair` is nested. */
+export interface SignedKeyPair {
+  keyPair: KeyPair;
   signature: Uint8Array;
   keyId: number;
 }
