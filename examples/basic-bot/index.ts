@@ -1,15 +1,20 @@
 /**
- * Basic bot example — minimal NexaWhats client with middleware + echo.
+ * Echo bot — minimal NexaWhats bot with middleware, commands, and
+ * persistent session storage.
  *
- *   1. Persistent auth via FileAuthStore (Baileys-compatible layout).
- *   2. Middleware pipeline logging every inbound message.
- *   3. An echo handler that replies to any direct (non-group) text.
+ * Features:
+ *   - QR-based pairing on first run (scan from WhatsApp → Linked Devices)
+ *   - Session persistence via FileAuthStore — subsequent runs skip pairing
+ *   - Middleware pipeline: LID resolution → anti-ban delays → logging → commands
+ *   - Echo: replies to any direct (non-group) text message
+ *   - /ping and /help commands
+ *   - Prometheus metrics + /health endpoint on port 9100
  *
- * Run (manual, against live WhatsApp):
+ * Usage:
  *   npx tsx examples/basic-bot/index.ts
  *
- * On first run scan the QR code from WhatsApp → Linked Devices.
- * The session persists under `./auth/` — subsequent runs skip the QR step.
+ * On first run, scan the QR code printed to the console.
+ * Subsequent runs reuse the saved session under `./auth/`.
  */
 
 import {
@@ -30,32 +35,94 @@ async function main(): Promise<void> {
     metrics: { prometheus: true, port: 9100 },
   });
 
-  // LID → phone translation so middleware only sees canonical JIDs.
+  // ── Middleware pipeline ────────────────────────────────────────────
+
+  // Resolve LID → PN so handlers only see canonical phone-number JIDs.
   client.use(lidResolver());
-  // Gaussian delay between sends — reduces ban risk.
+
+  // Add Gaussian timing jitter to sends (reduces ban risk).
   client.use(antiBan({ minDelay: 1000, maxDelay: 3000 }));
+
   // Structured console log of every inbound message.
   client.use(messageLogger());
 
-  // Echo handler — reply to any direct (non-group) text not from self.
+  // ── Command handler ────────────────────────────────────────────────
   client.use(async (ctx, next) => {
-    if (!ctx.isGroup && ctx.text && !ctx.message.key.fromMe) {
-      await ctx.reply({ text: `echo: ${ctx.text}` });
+    if (ctx.isGroup || ctx.message.key.fromMe || !ctx.text) {
+      return next();
     }
+
+    const text = ctx.text.trim();
+
+    if (text === '/ping') {
+      await ctx.reply({ text: 'pong' });
+      return;
+    }
+
+    if (text === '/help') {
+      await ctx.reply({
+        text:
+          'NexaWhats echo bot\n' +
+          '/ping  — connectivity check\n' +
+          '/help  — this message\n' +
+          '/info  — bot runtime info\n' +
+          'anything else → echoed back',
+      });
+      return;
+    }
+
+    if (text === '/info') {
+      const uptime = Math.floor((Date.now() - startedAt) / 1000);
+      const mem = process.memoryUsage();
+      await ctx.reply({
+        text: [
+          `uptime: ${uptime}s`,
+          `heap: ${(mem.heapUsed / 1024 / 1024).toFixed(1)} MB`,
+          `rss: ${(mem.rss / 1024 / 1024).toFixed(1)} MB`,
+          `health: http://localhost:9100/health`,
+        ].join('\n'),
+      });
+      return;
+    }
+
+    // Default: echo back
+    await ctx.reply({ text: `echo: ${text}` });
+
     await next();
   });
 
-  client.on('connection.update', ({ connection }) => {
+  // ── Events ─────────────────────────────────────────────────────────
+
+  client.on('connection.update', ({ connection, qr }) => {
+    if (qr) {
+      console.log(
+        '\n' +
+        '══════════════════════════════════════════════\n' +
+        '  Scan this QR code in WhatsApp:\n' +
+        '  Linked Devices → Link a Device\n' +
+        '══════════════════════════════════════════════\n' +
+        `${qr.slice(0, 80)}...\n` +
+        '══════════════════════════════════════════════\n',
+      );
+    }
     console.log(`[connection] → ${connection}`);
   });
 
   client.on('creds.update', async () => {
-    // Re-persist auth on every credential change.
     await store.saveState({
       creds: client.config.auth.creds,
       keys: store,
     });
   });
+
+  client.on('messages.upsert', ({ messages }) => {
+    // The messageLogger middleware already logs these; this handler
+    // is a no-op by default — add custom logic here if needed.
+  });
+
+  // ── Lifecycle ──────────────────────────────────────────────────────
+
+  const startedAt = Date.now();
 
   process.on('SIGINT', async () => {
     console.log('\nshutting down...');
@@ -63,11 +130,20 @@ async function main(): Promise<void> {
     process.exit(0);
   });
 
+  process.on('SIGTERM', async () => {
+    await client.disconnect();
+    process.exit(0);
+  });
+
+  console.log('NexaWhats echo bot starting...');
   await client.connect();
-  console.log('bot up — health on http://localhost:9100/health');
+
+  console.log('bot online');
+  console.log('health endpoint: http://localhost:9100/health');
+  console.log('metrics endpoint: http://localhost:9100/metrics');
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error('bot failed to start:', err);
   process.exit(1);
 });
