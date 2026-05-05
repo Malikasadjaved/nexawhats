@@ -1,0 +1,3178 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+        <title>NexaWhats — Production WhatsApp Web API</title>
+        <meta
+            name="description"
+            content="The WhatsApp Web API that doesn't collapse in production. Circuit breaker, pluggable auth stores, Koa-style middleware, Prometheus metrics. Built for real infrastructure."
+        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+            href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&family=Bebas+Neue&family=Instrument+Serif:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap"
+            rel="stylesheet"
+        />
+        <style>
+            *,
+            *::before,
+            *::after {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }
+            :root {
+                --ink: #0c0d0f;
+                --ink2: #141618;
+                --ink3: #1c1f23;
+                --paper: #f5f3ef;
+                --paper2: #ece9e3;
+                --dim: #6b7280;
+                --dim2: #9ca3af;
+                --line: rgba(255, 255, 255, 0.06);
+                --line2: rgba(255, 255, 255, 0.11);
+                --wa: #25d366;
+                --wa2: #128c7e;
+                --wa3: #075e54;
+                --amber: #f59e0b;
+                --red: #ef4444;
+                --sky: #38bdf8;
+                --text: #e8eaed;
+                --muted: #5a6378;
+                --muted2: #8892a4;
+                --font-display: "Bebas Neue", sans-serif;
+                --font-serif: "Instrument Serif", serif;
+                --font-body: "Manrope", sans-serif;
+                --font-mono: "DM Mono", monospace;
+            }
+            html {
+                scroll-behavior: smooth;
+                -webkit-font-smoothing: antialiased;
+            }
+            body {
+                background: var(--ink);
+                color: var(--text);
+                font-family: var(--font-body);
+                line-height: 1.6;
+                overflow-x: hidden;
+            }
+            a {
+                color: inherit;
+                text-decoration: none;
+            }
+            ::selection {
+                background: rgba(37, 211, 102, 0.25);
+                color: var(--wa);
+            }
+
+            /* scrollbar */
+            ::-webkit-scrollbar {
+                width: 3px;
+            }
+            ::-webkit-scrollbar-track {
+                background: var(--ink);
+            }
+            ::-webkit-scrollbar-thumb {
+                background: rgba(37, 211, 102, 0.18);
+                border-radius: 2px;
+            }
+
+            /* ===== SCROLL PROGRESS ===== */
+            #sp {
+                position: fixed;
+                top: 0;
+                left: 0;
+                height: 1.5px;
+                width: 0;
+                z-index: 3000;
+                background: var(--wa);
+                transition: width 0.08s;
+            }
+
+            /* ===== NAV ===== */
+            nav {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                z-index: 1000;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 0 2.5rem;
+                height: 52px;
+                background: rgba(12, 13, 15, 0.85);
+                backdrop-filter: blur(20px);
+                border-bottom: 1px solid var(--line);
+            }
+            .nav-logo {
+                font-family: var(--font-mono);
+                font-size: 0.88rem;
+                font-weight: 500;
+                letter-spacing: -0.01em;
+                display: flex;
+                align-items: center;
+                gap: 0.55rem;
+            }
+            .nav-logo-mark {
+                width: 28px;
+                height: 28px;
+                border-radius: 6px;
+                background: var(--wa);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 0.75rem;
+                color: #000;
+                font-weight: 700;
+                letter-spacing: -0.02em;
+            }
+            .nav-logo em {
+                font-style: normal;
+                color: var(--wa);
+            }
+            .nav-center {
+                display: flex;
+                gap: 0;
+                align-items: center;
+            }
+            .nav-center a {
+                font-size: 0.78rem;
+                font-weight: 500;
+                color: var(--muted2);
+                padding: 0.3rem 0.8rem;
+                border-radius: 5px;
+                transition:
+                    color 0.12s,
+                    background 0.12s;
+            }
+            .nav-center a:hover,
+            .nav-center a.on {
+                color: var(--text);
+                background: rgba(255, 255, 255, 0.05);
+            }
+            .nav-right {
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+            }
+            .nav-alpha {
+                font-family: var(--font-mono);
+                font-size: 0.68rem;
+                font-weight: 500;
+                padding: 0.22rem 0.65rem;
+                border-radius: 4px;
+                border: 1px solid rgba(245, 158, 11, 0.3);
+                color: var(--amber);
+                background: rgba(245, 158, 11, 0.07);
+            }
+            .nav-install {
+                font-family: var(--font-mono);
+                font-size: 0.74rem;
+                font-weight: 500;
+                padding: 0.32rem 1rem;
+                border-radius: 6px;
+                border: 1px solid rgba(37, 211, 102, 0.28);
+                color: var(--wa);
+                background: rgba(37, 211, 102, 0.08);
+                transition:
+                    box-shadow 0.18s,
+                    border-color 0.18s,
+                    background 0.18s;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.4rem;
+            }
+            .nav-install:hover {
+                box-shadow: 0 0 16px rgba(37, 211, 102, 0.22);
+                border-color: rgba(37, 211, 102, 0.5);
+                background: rgba(37, 211, 102, 0.14);
+            }
+            .nav-ham {
+                display: none;
+                flex-direction: column;
+                gap: 4px;
+                cursor: pointer;
+                background: none;
+                border: none;
+                padding: 0.3rem;
+            }
+            .nav-ham span {
+                display: block;
+                width: 18px;
+                height: 1.5px;
+                background: var(--text);
+                border-radius: 2px;
+                transition:
+                    transform 0.25s,
+                    opacity 0.25s;
+            }
+            .nav-ham.open span:nth-child(1) {
+                transform: translateY(5.5px) rotate(45deg);
+            }
+            .nav-ham.open span:nth-child(2) {
+                opacity: 0;
+            }
+            .nav-ham.open span:nth-child(3) {
+                transform: translateY(-5.5px) rotate(-45deg);
+            }
+            .mob-menu {
+                display: none;
+                position: fixed;
+                inset: 0;
+                top: 52px;
+                background: rgba(12, 13, 15, 0.98);
+                backdrop-filter: blur(18px);
+                z-index: 999;
+                padding: 2rem;
+                flex-direction: column;
+                gap: 1.2rem;
+            }
+            .mob-menu.open {
+                display: flex;
+            }
+            .mob-menu a {
+                font-size: 1.05rem;
+                font-weight: 600;
+                color: var(--text);
+                padding: 0.45rem 0;
+                border-bottom: 1px solid var(--line);
+            }
+            @media (max-width: 768px) {
+                .nav-center {
+                    display: none;
+                }
+                .nav-ham {
+                    display: flex;
+                }
+                nav {
+                    padding: 0 1.25rem;
+                }
+            }
+
+            /* ===== HERO ===== */
+            .hero {
+                position: relative;
+                min-height: 100vh;
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                align-items: center;
+                gap: 0;
+                padding: 6rem 0 3rem;
+                overflow: hidden;
+            }
+            @media (max-width: 900px) {
+                .hero {
+                    grid-template-columns: 1fr;
+                    padding: 6rem 1.5rem 3rem;
+                }
+            }
+            .hero-left {
+                padding: 4rem 3rem 4rem 5rem;
+                border-right: 1px solid var(--line);
+                position: relative;
+                z-index: 1;
+            }
+            @media (max-width: 900px) {
+                .hero-left {
+                    padding: 2.5rem 0;
+                    border-right: none;
+                }
+            }
+            .hero-kicker {
+                font-family: var(--font-mono);
+                font-size: 0.65rem;
+                font-weight: 500;
+                letter-spacing: 0.2em;
+                text-transform: uppercase;
+                color: var(--wa);
+                margin-bottom: 1.2rem;
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+            }
+            .hero-kicker::before {
+                content: "";
+                display: block;
+                width: 20px;
+                height: 1px;
+                background: var(--wa);
+            }
+            .hero-title {
+                font-family: var(--font-display);
+                font-size: clamp(5rem, 8vw, 8.5rem);
+                line-height: 0.93;
+                letter-spacing: 0.01em;
+                margin-bottom: 1.75rem;
+            }
+            .hero-title span {
+                display: block;
+                background: linear-gradient(
+                    180deg,
+                    var(--text) 40%,
+                    rgba(232, 234, 237, 0.3)
+                );
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }
+            .hero-title .accent {
+                background: linear-gradient(135deg, var(--wa), var(--sky));
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }
+            .hero-sub {
+                font-size: 0.95rem;
+                color: var(--muted2);
+                line-height: 1.75;
+                max-width: 420px;
+                margin-bottom: 2.25rem;
+            }
+            .hero-sub strong {
+                color: var(--text);
+                font-weight: 600;
+            }
+            .hero-ctas {
+                display: flex;
+                gap: 0.75rem;
+                flex-wrap: wrap;
+                margin-bottom: 2.75rem;
+            }
+            .btn-wa {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+                background: var(--wa);
+                color: #000;
+                padding: 0.72rem 1.5rem;
+                border-radius: 8px;
+                font-family: var(--font-mono);
+                font-size: 0.8rem;
+                font-weight: 500;
+                box-shadow: 0 0 32px rgba(37, 211, 102, 0.28);
+                transition:
+                    box-shadow 0.18s,
+                    transform 0.14s;
+            }
+            .btn-wa:hover {
+                box-shadow: 0 0 48px rgba(37, 211, 102, 0.44);
+                transform: translateY(-1px);
+            }
+            .btn-outline {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+                padding: 0.72rem 1.5rem;
+                border-radius: 8px;
+                font-size: 0.88rem;
+                font-weight: 600;
+                border: 1px solid var(--line2);
+                color: var(--muted2);
+                transition:
+                    border-color 0.15s,
+                    color 0.15s,
+                    background 0.15s;
+            }
+            .btn-outline:hover {
+                border-color: rgba(255, 255, 255, 0.2);
+                color: var(--text);
+                background: rgba(255, 255, 255, 0.04);
+            }
+            .hero-badges {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.4rem;
+            }
+            .hbadge {
+                font-family: var(--font-mono);
+                font-size: 0.67rem;
+                font-weight: 400;
+                padding: 0.2rem 0.65rem;
+                border-radius: 4px;
+                border: 1px solid var(--line);
+                color: var(--muted2);
+                display: inline-flex;
+                align-items: center;
+                gap: 0.3rem;
+            }
+            .hbadge-dot {
+                width: 4px;
+                height: 4px;
+                border-radius: 50%;
+                flex-shrink: 0;
+            }
+
+            /* hero right — connection state machine */
+            .hero-right {
+                padding: 4rem 3rem;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                position: relative;
+            }
+            @media (max-width: 900px) {
+                .hero-right {
+                    padding: 2rem 0;
+                }
+            }
+
+            /* diagonal scanlines bg */
+            .hero::before {
+                content: "";
+                position: absolute;
+                inset: 0;
+                z-index: 0;
+                background-image: repeating-linear-gradient(
+                    -45deg,
+                    transparent,
+                    transparent 12px,
+                    rgba(37, 211, 102, 0.012) 12px,
+                    rgba(37, 211, 102, 0.012) 13px
+                );
+                pointer-events: none;
+            }
+
+            /* state machine */
+            .sm-wrap {
+                background: rgba(20, 22, 24, 0.9);
+                border: 1px solid rgba(37, 211, 102, 0.12);
+                border-radius: 14px;
+                padding: 2rem;
+                width: 100%;
+                max-width: 460px;
+                box-shadow:
+                    0 0 80px rgba(37, 211, 102, 0.04),
+                    0 24px 60px rgba(0, 0, 0, 0.5);
+            }
+            .sm-title {
+                font-family: var(--font-mono);
+                font-size: 0.65rem;
+                letter-spacing: 0.14em;
+                text-transform: uppercase;
+                color: var(--wa);
+                opacity: 0.65;
+                margin-bottom: 1.4rem;
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            .sm-title::after {
+                content: "";
+                flex: 1;
+                height: 1px;
+                background: rgba(37, 211, 102, 0.15);
+            }
+            .sm-states {
+                display: flex;
+                flex-direction: column;
+                gap: 0;
+            }
+            .sm-row {
+                display: flex;
+                align-items: center;
+                gap: 0;
+            }
+            .sm-state {
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+                padding: 0.65rem 0.9rem;
+                border-radius: 8px;
+                border: 1px solid var(--line);
+                background: var(--ink2);
+                min-width: 140px;
+                cursor: default;
+                transition:
+                    border-color 0.2s,
+                    background 0.2s;
+                position: relative;
+            }
+            .sm-state.current {
+                border-color: var(--wa);
+                background: rgba(37, 211, 102, 0.06);
+            }
+            .sm-state.error {
+                border-color: rgba(239, 68, 68, 0.35);
+                background: rgba(239, 68, 68, 0.05);
+            }
+            .sm-state.warn {
+                border-color: rgba(245, 158, 11, 0.3);
+                background: rgba(245, 158, 11, 0.04);
+            }
+            .sm-dot {
+                width: 8px;
+                height: 8px;
+                border-radius: 50%;
+                flex-shrink: 0;
+            }
+            .sm-dot.green {
+                background: var(--wa);
+                animation: smPulse 2s infinite;
+            }
+            .sm-dot.amber {
+                background: var(--amber);
+            }
+            .sm-dot.red {
+                background: var(--red);
+            }
+            .sm-dot.gray {
+                background: var(--muted);
+            }
+            @keyframes smPulse {
+                0%,
+                100% {
+                    box-shadow: 0 0 0 0 rgba(37, 211, 102, 0.5);
+                }
+                70% {
+                    box-shadow: 0 0 0 8px rgba(37, 211, 102, 0);
+                }
+            }
+            .sm-name {
+                font-family: var(--font-mono);
+                font-size: 0.78rem;
+                font-weight: 500;
+                color: var(--text);
+            }
+            .sm-desc {
+                font-size: 0.68rem;
+                color: var(--muted2);
+                margin-top: 0.02rem;
+            }
+            .sm-arrow {
+                font-family: var(--font-mono);
+                font-size: 0.62rem;
+                color: var(--muted);
+                padding: 0.2rem 0.6rem;
+                margin: 0 0.4rem;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 0.15rem;
+                text-align: center;
+                min-width: 80px;
+            }
+            .sm-arrow-label {
+                font-size: 0.58rem;
+                opacity: 0.6;
+            }
+            .sm-arrow-line {
+                color: var(--wa);
+                opacity: 0.5;
+                font-size: 0.9rem;
+            }
+            .sm-cb-wrap {
+                margin-top: 1.25rem;
+                padding: 1rem;
+                background: var(--ink);
+                border-radius: 8px;
+                border: 1px solid var(--line);
+            }
+            .sm-cb-title {
+                font-family: var(--font-mono);
+                font-size: 0.63rem;
+                color: var(--amber);
+                margin-bottom: 0.65rem;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
+            }
+            .sm-cb-states {
+                display: flex;
+                gap: 0.5rem;
+                flex-wrap: wrap;
+            }
+            .sm-cb-state {
+                flex: 1;
+                padding: 0.55rem 0.7rem;
+                border-radius: 6px;
+                border: 1px solid var(--line);
+                background: var(--ink2);
+                text-align: center;
+                font-family: var(--font-mono);
+                font-size: 0.67rem;
+            }
+            .sm-cb-state.active-cb {
+                border-color: rgba(37, 211, 102, 0.3);
+                background: rgba(37, 211, 102, 0.06);
+                color: var(--wa);
+            }
+            .sm-cb-state.open-cb {
+                border-color: rgba(239, 68, 68, 0.3);
+                background: rgba(239, 68, 68, 0.05);
+                color: var(--red);
+            }
+            .sm-cb-state.half-cb {
+                border-color: rgba(245, 158, 11, 0.25);
+                background: rgba(245, 158, 11, 0.04);
+                color: var(--amber);
+            }
+
+            /* ===== DIVIDER ===== */
+            .rule {
+                height: 1px;
+                background: linear-gradient(
+                    90deg,
+                    transparent,
+                    var(--line2),
+                    transparent
+                );
+                margin: 0 3rem;
+            }
+
+            /* ===== SECTIONS ===== */
+            .sec {
+                position: relative;
+                z-index: 1;
+                padding: 5.5rem 5rem;
+            }
+            @media (max-width: 900px) {
+                .sec {
+                    padding: 4rem 1.5rem;
+                }
+            }
+            .ctr {
+                max-width: 1160px;
+                margin: 0 auto;
+            }
+            .eyebrow {
+                font-family: var(--font-mono);
+                font-size: 0.62rem;
+                font-weight: 500;
+                letter-spacing: 0.2em;
+                text-transform: uppercase;
+                color: var(--wa);
+                margin-bottom: 0.7rem;
+                display: flex;
+                align-items: center;
+                gap: 0.65rem;
+            }
+            .eyebrow::before {
+                content: "#";
+                opacity: 0.4;
+            }
+            .sec-h {
+                font-family: var(--font-display);
+                font-size: clamp(2.8rem, 4.5vw, 4.8rem);
+                line-height: 0.95;
+                letter-spacing: 0.01em;
+                margin-bottom: 0.85rem;
+            }
+            .sec-sub {
+                font-size: 0.92rem;
+                color: var(--muted2);
+                max-width: 480px;
+                line-height: 1.72;
+            }
+
+            /* ===== STATUS BANNER ===== */
+            .status-wrap {
+                background: rgba(245, 158, 11, 0.05);
+                border: 1px solid rgba(245, 158, 11, 0.16);
+                border-radius: 10px;
+                padding: 1rem 1.4rem;
+                margin-bottom: 3rem;
+                display: flex;
+                align-items: flex-start;
+                gap: 1rem;
+                flex-wrap: wrap;
+            }
+            .status-pill {
+                font-family: var(--font-mono);
+                font-size: 0.67rem;
+                font-weight: 700;
+                padding: 0.18rem 0.65rem;
+                border-radius: 4px;
+                background: rgba(245, 158, 11, 0.1);
+                border: 1px solid rgba(245, 158, 11, 0.25);
+                color: var(--amber);
+                flex-shrink: 0;
+                margin-top: 0.1rem;
+            }
+            .status-text {
+                font-size: 0.84rem;
+                color: var(--muted2);
+                line-height: 1.6;
+            }
+            .status-text strong {
+                color: var(--amber);
+            }
+            .status-done {
+                color: var(--wa);
+            }
+
+            /* ===== METRICS BAR ===== */
+            .metrics-row {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                overflow: hidden;
+                background: var(--line);
+                gap: 1px;
+                margin-bottom: 4rem;
+            }
+            @media (max-width: 700px) {
+                .metrics-row {
+                    grid-template-columns: repeat(2, 1fr);
+                }
+            }
+            .metric {
+                background: var(--ink2);
+                padding: 1.75rem 1.5rem;
+                position: relative;
+                overflow: hidden;
+            }
+            .metric::after {
+                content: "";
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                height: 2px;
+                background: var(--wa);
+                opacity: 0;
+                transition: opacity 0.25s;
+                transform: scaleX(0);
+                transform-origin: left;
+                transition:
+                    transform 0.4s ease,
+                    opacity 0.2s;
+            }
+            .metric:hover::after {
+                opacity: 1;
+                transform: scaleX(1);
+            }
+            .metric-n {
+                font-family: var(--font-display);
+                font-size: 3.2rem;
+                line-height: 1;
+                color: var(--text);
+                letter-spacing: 0.01em;
+                margin-bottom: 0.4rem;
+            }
+            .metric-n.green {
+                color: var(--wa);
+            }
+            .metric-l {
+                font-size: 0.74rem;
+                color: var(--muted);
+                font-weight: 500;
+            }
+
+            /* ===== FEATURE MATRIX ===== */
+            .feat-matrix {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 1px;
+                background: var(--line);
+                border: 1px solid var(--line);
+                border-radius: 14px;
+                overflow: hidden;
+                margin-top: 3rem;
+            }
+            @media (max-width: 900px) {
+                .feat-matrix {
+                    grid-template-columns: 1fr;
+                }
+            }
+            @media (min-width: 600px) and (max-width: 900px) {
+                .feat-matrix {
+                    grid-template-columns: repeat(2, 1fr);
+                }
+            }
+            .feat-cell {
+                background: var(--ink2);
+                padding: 2rem;
+                transition: background 0.18s;
+                position: relative;
+            }
+            .feat-cell:hover {
+                background: var(--ink3);
+            }
+            .feat-cell::before {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 1.5px;
+                background: linear-gradient(
+                    90deg,
+                    transparent,
+                    var(--wa-c, var(--wa)),
+                    transparent
+                );
+                opacity: 0;
+                transition: opacity 0.25s;
+            }
+            .feat-cell:hover::before {
+                opacity: 0.5;
+            }
+            .feat-icon {
+                font-size: 1.4rem;
+                margin-bottom: 1rem;
+                display: inline-block;
+                padding: 0.5rem;
+                background: var(--ink3);
+                border-radius: 8px;
+            }
+            .feat-cell h3 {
+                font-family: var(--font-body);
+                font-size: 0.95rem;
+                font-weight: 700;
+                margin-bottom: 0.5rem;
+                letter-spacing: -0.01em;
+            }
+            .feat-cell p {
+                font-size: 0.82rem;
+                color: var(--muted2);
+                line-height: 1.65;
+            }
+            .feat-mono {
+                margin-top: 1rem;
+                font-family: var(--font-mono);
+                font-size: 0.7rem;
+                color: var(--wa);
+                opacity: 0.7;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.3rem;
+            }
+            .feat-tag {
+                padding: 0.15rem 0.5rem;
+                border: 1px solid rgba(37, 211, 102, 0.15);
+                border-radius: 3px;
+            }
+
+            /* ===== LIVE TERMINAL ===== */
+            .terminal-wrap {
+                display: grid;
+                grid-template-columns: 200px 1fr;
+                border: 1px solid var(--line2);
+                border-radius: 14px;
+                overflow: hidden;
+                background: var(--ink2);
+                box-shadow: 0 40px 80px rgba(0, 0, 0, 0.6);
+                margin-top: 3rem;
+            }
+            @media (max-width: 768px) {
+                .terminal-wrap {
+                    grid-template-columns: 1fr;
+                }
+            }
+            .terminal-sidebar {
+                background: var(--ink);
+                border-right: 1px solid var(--line);
+                padding: 1rem 0;
+            }
+            @media (max-width: 768px) {
+                .terminal-sidebar {
+                    border-right: none;
+                    border-bottom: 1px solid var(--line);
+                    display: flex;
+                    flex-wrap: wrap;
+                    padding: 0.5rem;
+                }
+            }
+            .t-scenario {
+                padding: 0.55rem 1rem;
+                font-family: var(--font-mono);
+                font-size: 0.68rem;
+                color: var(--muted2);
+                cursor: pointer;
+                transition:
+                    color 0.12s,
+                    background 0.12s;
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+                border-left: 2px solid transparent;
+            }
+            .t-scenario:hover {
+                color: var(--text);
+                background: rgba(255, 255, 255, 0.04);
+            }
+            .t-scenario.on {
+                color: var(--wa);
+                background: rgba(37, 211, 102, 0.06);
+                border-left-color: var(--wa);
+            }
+            .t-scenario-icon {
+                font-size: 0.85rem;
+                flex-shrink: 0;
+            }
+            .terminal-main {
+                display: flex;
+                flex-direction: column;
+            }
+            .term-bar {
+                background: #0a0d10;
+                border-bottom: 1px solid var(--line);
+                padding: 0.6rem 1rem;
+                display: flex;
+                align-items: center;
+                gap: 0.45rem;
+            }
+            .tdot {
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+            }
+            .term-title {
+                margin: 0 auto;
+                font-family: var(--font-mono);
+                font-size: 0.64rem;
+                color: var(--muted);
+            }
+            .term-body {
+                padding: 1.4rem 1.5rem;
+                font-family: var(--font-mono);
+                font-size: 0.775rem;
+                line-height: 1.9;
+                min-height: 340px;
+                overflow-y: auto;
+                scroll-behavior: smooth;
+                background: #050810;
+                flex: 1;
+                position: relative;
+            }
+            .term-body::-webkit-scrollbar {
+                width: 3px;
+            }
+            .term-body::-webkit-scrollbar-thumb {
+                background: rgba(37, 211, 102, 0.12);
+            }
+            .tp {
+                color: var(--wa);
+                user-select: none;
+                margin-right: 0.3rem;
+            }
+            .tc {
+                color: var(--text);
+            }
+            .to {
+                color: var(--muted2);
+                padding-left: 0.4rem;
+            }
+            .ts {
+                color: var(--wa);
+                font-weight: 500;
+                padding-left: 0.4rem;
+            }
+            .tw {
+                color: var(--amber);
+                padding-left: 0.4rem;
+            }
+            .te {
+                color: var(--red);
+                padding-left: 0.4rem;
+            }
+            .tblk {
+                background: rgba(37, 211, 102, 0.04);
+                border-left: 2px solid rgba(37, 211, 102, 0.3);
+                padding: 0.6rem 0.9rem;
+                border-radius: 0 7px 7px 0;
+                margin: 0.4rem 0 0.4rem 0.4rem;
+            }
+            .tcur {
+                color: var(--wa);
+                animation: blink 1s step-end infinite;
+            }
+            @keyframes blink {
+                0%,
+                100% {
+                    opacity: 1;
+                }
+                50% {
+                    opacity: 0;
+                }
+            }
+            .tpanel {
+                display: none;
+            }
+            .tpanel.on {
+                display: block;
+            }
+            .tcopy {
+                position: absolute;
+                top: 0.85rem;
+                right: 0.85rem;
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid var(--line2);
+                border-radius: 5px;
+                color: var(--muted2);
+                font-family: var(--font-mono);
+                font-size: 0.62rem;
+                padding: 0.25rem 0.6rem;
+                cursor: pointer;
+                transition:
+                    background 0.12s,
+                    color 0.12s;
+            }
+            .tcopy:hover {
+                background: rgba(255, 255, 255, 0.08);
+                color: var(--text);
+            }
+
+            /* ===== AUTH STORES ===== */
+            .store-row {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 1rem;
+                margin-top: 2.5rem;
+            }
+            @media (max-width: 768px) {
+                .store-row {
+                    grid-template-columns: 1fr;
+                }
+            }
+            .store-card {
+                border: 1px solid var(--line);
+                border-radius: 12px;
+                padding: 1.75rem;
+                background: var(--ink2);
+                position: relative;
+                overflow: hidden;
+                transition:
+                    border-color 0.2s,
+                    transform 0.2s;
+            }
+            .store-card::after {
+                content: "";
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 1.5px;
+                background: var(--sc, var(--wa));
+                opacity: 0;
+                transition: opacity 0.2s;
+            }
+            .store-card:hover {
+                border-color: var(--line2);
+                transform: translateY(-3px);
+            }
+            .store-card:hover::after {
+                opacity: 0.6;
+            }
+            .store-badge {
+                font-family: var(--font-mono);
+                font-size: 0.62rem;
+                font-weight: 700;
+                letter-spacing: 0.1em;
+                text-transform: uppercase;
+                padding: 0.16rem 0.6rem;
+                border-radius: 3px;
+                margin-bottom: 1rem;
+                display: inline-block;
+                border: 1px solid var(--sb-border, rgba(37, 211, 102, 0.2));
+                color: var(--sb-color, var(--wa));
+                background: var(--sb-bg, rgba(37, 211, 102, 0.08));
+            }
+            .store-card h3 {
+                font-family: var(--font-body);
+                font-size: 1rem;
+                font-weight: 700;
+                margin-bottom: 0.4rem;
+                letter-spacing: -0.02em;
+            }
+            .store-card p {
+                font-size: 0.82rem;
+                color: var(--muted2);
+                line-height: 1.6;
+                margin-bottom: 1rem;
+            }
+            .store-snippet {
+                background: var(--ink);
+                border-radius: 7px;
+                padding: 0.85rem 1rem;
+                font-family: var(--font-mono);
+                font-size: 0.7rem;
+                line-height: 1.75;
+                border: 1px solid var(--line);
+                overflow-x: auto;
+            }
+            .kw {
+                color: #7dd3fc;
+            }
+            .fn {
+                color: #86efac;
+            }
+            .st {
+                color: #fca5a5;
+            }
+            .cm {
+                color: var(--muted);
+            }
+            .op {
+                color: #c4b5fd;
+            }
+
+            /* ===== EVENTS TABLE ===== */
+            .evt-table {
+                width: 100%;
+                margin-top: 2.5rem;
+                border-radius: 12px;
+                border: 1px solid var(--line);
+                overflow: hidden;
+            }
+            .evt-row {
+                display: grid;
+                grid-template-columns: 1.8fr 1.6fr 2fr;
+                padding: 0.82rem 1.2rem;
+                border-bottom: 1px solid var(--line);
+                align-items: center;
+                transition: background 0.12s;
+            }
+            .evt-row:last-child {
+                border-bottom: none;
+            }
+            .evt-row:hover {
+                background: rgba(255, 255, 255, 0.02);
+            }
+            .evt-row.hdr {
+                background: var(--ink2);
+                font-size: 0.67rem;
+                font-weight: 700;
+                letter-spacing: 0.1em;
+                text-transform: uppercase;
+                color: var(--muted);
+            }
+            .evt-name {
+                font-family: var(--font-mono);
+                font-size: 0.76rem;
+                color: var(--wa);
+                font-weight: 500;
+            }
+            .evt-type {
+                font-family: var(--font-mono);
+                font-size: 0.72rem;
+                color: var(--sky);
+            }
+            .evt-desc {
+                font-size: 0.78rem;
+                color: var(--muted2);
+            }
+            @media (max-width: 600px) {
+                .evt-row {
+                    grid-template-columns: 1fr;
+                    gap: 0.2rem;
+                }
+                .evt-type {
+                    display: none;
+                }
+            }
+
+            /* ===== COMPARE ===== */
+            .compare-wrap {
+                overflow-x: auto;
+                margin-top: 2.5rem;
+                border: 1px solid var(--line);
+                border-radius: 12px;
+            }
+            .compare-table {
+                width: 100%;
+                border-collapse: collapse;
+                min-width: 520px;
+            }
+            .compare-table th,
+            .compare-table td {
+                padding: 0.82rem 1.1rem;
+                text-align: center;
+                border-bottom: 1px solid var(--line);
+                font-size: 0.82rem;
+            }
+            .compare-table th {
+                font-family: var(--font-body);
+                font-weight: 700;
+                background: var(--ink2);
+                color: var(--text);
+                position: sticky;
+                top: 0;
+                z-index: 2;
+            }
+            .compare-table td {
+                color: var(--muted2);
+            }
+            .compare-table th:first-child,
+            .compare-table td:first-child {
+                text-align: left;
+                font-weight: 600;
+            }
+            .compare-table tbody tr:hover td {
+                background: rgba(255, 255, 255, 0.015);
+            }
+            .hl {
+                background: rgba(37, 211, 102, 0.04) !important;
+                border-left: 1.5px solid var(--wa);
+                border-right: 1.5px solid var(--wa);
+            }
+            .hl-t {
+                border-top: 1.5px solid var(--wa) !important;
+            }
+            .hl-b {
+                border-bottom: 1.5px solid var(--wa) !important;
+            }
+            .compare-table tbody tr:hover td.hl {
+                background: rgba(37, 211, 102, 0.07) !important;
+            }
+            .ck {
+                color: var(--wa);
+                font-weight: 700;
+            }
+            .cx {
+                color: var(--muted);
+                opacity: 0.3;
+            }
+            .cp {
+                color: var(--muted2);
+            }
+
+            /* ===== QUICK START ===== */
+            .qs-grid {
+                display: grid;
+                grid-template-columns: 1fr 1.3fr;
+                gap: 3rem;
+                margin-top: 3rem;
+                align-items: start;
+            }
+            @media (max-width: 900px) {
+                .qs-grid {
+                    grid-template-columns: 1fr;
+                }
+            }
+            .qs-steps {
+                display: flex;
+                flex-direction: column;
+                gap: 1.5rem;
+            }
+            .qs-step {
+                display: flex;
+                gap: 1rem;
+            }
+            .qs-n {
+                width: 30px;
+                height: 30px;
+                border-radius: 6px;
+                flex-shrink: 0;
+                background: rgba(37, 211, 102, 0.1);
+                border: 1px solid rgba(37, 211, 102, 0.25);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-family: var(--font-mono);
+                font-size: 0.78rem;
+                font-weight: 700;
+                color: var(--wa);
+            }
+            .qs-step h4 {
+                font-family: var(--font-body);
+                font-size: 0.9rem;
+                font-weight: 700;
+                margin-bottom: 0.2rem;
+            }
+            .qs-step p {
+                font-size: 0.8rem;
+                color: var(--muted2);
+            }
+            .code-win {
+                background: #050810;
+                border: 1px solid rgba(37, 211, 102, 0.1);
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+            }
+            .code-bar {
+                background: var(--ink2);
+                border-bottom: 1px solid var(--line);
+                padding: 0.55rem 1rem;
+                display: flex;
+                align-items: center;
+                gap: 0.4rem;
+            }
+            .code-file {
+                margin-left: 0.5rem;
+                font-family: var(--font-mono);
+                font-size: 0.63rem;
+                color: var(--muted);
+            }
+            .code-body {
+                padding: 1.4rem 1.5rem;
+                font-family: var(--font-mono);
+                font-size: 0.74rem;
+                line-height: 1.85;
+                overflow-x: auto;
+                white-space: pre;
+            }
+
+            /* ===== FOOTER CTA ===== */
+            .footer-cta {
+                position: relative;
+                overflow: hidden;
+                text-align: center;
+                padding: 8rem 2rem 5.5rem;
+                border-top: 1px solid var(--line);
+            }
+            .footer-cta::before {
+                content: "";
+                position: absolute;
+                inset: 0;
+                background: radial-gradient(
+                    ellipse 50% 60% at 50% 100%,
+                    rgba(37, 211, 102, 0.1),
+                    transparent
+                );
+                pointer-events: none;
+            }
+            .footer-cta::after {
+                content: "";
+                position: absolute;
+                inset: 0;
+                background-image: repeating-linear-gradient(
+                    0deg,
+                    transparent,
+                    transparent 60px,
+                    rgba(37, 211, 102, 0.015) 60px,
+                    rgba(37, 211, 102, 0.015) 61px
+                );
+                pointer-events: none;
+            }
+            .fcta-inner {
+                position: relative;
+                z-index: 1;
+            }
+            .fcta-h {
+                font-family: var(--font-display);
+                font-size: clamp(4rem, 8vw, 8rem);
+                line-height: 0.92;
+                letter-spacing: 0.01em;
+                margin-bottom: 1.25rem;
+            }
+            .fcta-sub {
+                font-size: 1rem;
+                color: var(--muted2);
+                margin-bottom: 2.5rem;
+                max-width: 440px;
+                margin-left: auto;
+                margin-right: auto;
+            }
+            .fcta-note {
+                margin-top: 2rem;
+                font-family: var(--font-mono);
+                font-size: 0.68rem;
+                color: var(--muted);
+                line-height: 1.6;
+            }
+
+            /* ===== FOOTER ===== */
+            footer {
+                border-top: 1px solid var(--line);
+                padding: 1.75rem 5rem;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                flex-wrap: wrap;
+                gap: 1rem;
+            }
+            @media (max-width: 768px) {
+                footer {
+                    padding: 1.5rem;
+                }
+            }
+            .footer-links {
+                display: flex;
+                gap: 1.5rem;
+                list-style: none;
+                flex-wrap: wrap;
+            }
+            .footer-links a {
+                font-size: 0.74rem;
+                color: var(--muted);
+                transition: color 0.12s;
+            }
+            .footer-links a:hover {
+                color: var(--text);
+            }
+            footer p {
+                font-size: 0.7rem;
+                color: var(--muted);
+            }
+
+            /* ===== REVEAL ===== */
+            .rev {
+                opacity: 1;
+                transform: translateY(0);
+                transition:
+                    opacity 0.6s ease,
+                    transform 0.6s ease;
+            }
+            .rev.pre {
+                opacity: 0;
+                transform: translateY(18px);
+            }
+            .rev.in {
+                opacity: 1;
+                transform: translateY(0);
+            }
+            .d1 {
+                transition-delay: 0.07s;
+            }
+            .d2 {
+                transition-delay: 0.14s;
+            }
+            .d3 {
+                transition-delay: 0.21s;
+            }
+            .d4 {
+                transition-delay: 0.28s;
+            }
+
+            /* ===== TOAST ===== */
+            .toast {
+                position: fixed;
+                bottom: 1.75rem;
+                left: 50%;
+                transform: translateX(-50%) translateY(6px);
+                background: var(--ink3);
+                border: 1px solid var(--line2);
+                border-radius: 8px;
+                padding: 0.55rem 1rem;
+                font-family: var(--font-mono);
+                font-size: 0.73rem;
+                color: var(--wa);
+                z-index: 9999;
+                opacity: 0;
+                transition:
+                    opacity 0.2s,
+                    transform 0.2s;
+                pointer-events: none;
+                white-space: nowrap;
+            }
+            .toast.show {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+
+            @media (max-width: 480px) {
+                .sec {
+                    padding: 3.5rem 1.25rem;
+                }
+                .hero-left {
+                    padding: 2rem 0;
+                }
+                .hero-title {
+                    font-size: 4.5rem;
+                }
+                .evt-table {
+                    font-size: 0.8rem;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <div id="sp"></div>
+        <div class="toast" id="toast"></div>
+
+        <!-- NAV -->
+        <nav id="nav">
+            <div class="nav-logo">
+                <div class="nav-logo-mark">NW</div>
+                <span>Nexa<em>Whats</em></span>
+            </div>
+            <div class="nav-center">
+                <a href="#features">Features</a>
+                <a href="#demo">Demo</a>
+                <a href="#stores">Stores</a>
+                <a href="#events">Events</a>
+                <a href="#compare">Compare</a>
+                <a href="#quickstart">Start</a>
+            </div>
+            <div class="nav-right">
+                <span class="nav-alpha">v0.2.0-rc</span>
+                <a class="nav-install" href="#quickstart">
+                    <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.5"
+                    >
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <path d="M3 9h18M9 21V9" />
+                    </svg>
+                    npm install nexawhats
+                </a>
+            </div>
+            <button class="nav-ham" id="navHam">
+                <span></span><span></span><span></span>
+            </button>
+        </nav>
+        <div class="mob-menu" id="mobMenu">
+            <a href="#features" onclick="closeMob()">Features</a>
+            <a href="#demo" onclick="closeMob()">Demo</a>
+            <a href="#stores" onclick="closeMob()">Stores</a>
+            <a href="#events" onclick="closeMob()">Events</a>
+            <a href="#compare" onclick="closeMob()">Compare</a>
+            <a href="#quickstart" onclick="closeMob()">Quick Start</a>
+            <a
+                class="btn-wa"
+                href="#quickstart"
+                onclick="closeMob()"
+                style="justify-content: center; margin-top: 0.5rem"
+                >Get Started</a
+            >
+        </div>
+
+        <!-- HERO -->
+        <section class="hero" id="home">
+            <div class="hero-left">
+                <div class="hero-kicker">Production WhatsApp API · Node.js</div>
+                <h1 class="hero-title">
+                    <span>NEXA</span>
+                    <span class="accent">WHATS</span>
+                </h1>
+                <p class="hero-sub">
+                    The WhatsApp Web protocol layer that
+                    <strong>doesn't collapse under load.</strong>
+                    Circuit breaker, pluggable auth stores, Koa-style
+                    middleware, Prometheus metrics. The Baileys replacement
+                    built for real infrastructure.
+                </p>
+                <div class="hero-ctas">
+                    <a class="btn-wa" href="#quickstart">
+                        <svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                        >
+                            <polyline points="9 18 15 12 9 6" />
+                        </svg>
+                        Get Started
+                    </a>
+                    <a
+                        class="btn-outline"
+                        href="https://github.com"
+                        target="_blank"
+                    >
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                        >
+                            <path
+                                d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.79-.26.79-.58v-2.23c-3.34.73-4.03-1.42-4.03-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .11-.78.42-1.31.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23.96-.27 1.98-.4 3-.4 1.02 0 2.05.13 3 .4 2.29-1.55 3.3-1.23 3.3-1.23.66 1.65.24 2.87.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.19.7.8.58C20.57 21.8 24 17.3 24 12 24 5.37 18.63 0 12 0z"
+                            />
+                        </svg>
+                        GitHub
+                    </a>
+                </div>
+                <div class="hero-badges">
+                    <span class="hbadge"
+                        ><span
+                            class="hbadge-dot"
+                            style="background: var(--wa)"
+                        ></span
+                        >TypeScript-first</span
+                    >
+                    <span class="hbadge"
+                        ><span
+                            class="hbadge-dot"
+                            style="background: var(--sky)"
+                        ></span
+                        >502 tests</span
+                    >
+                    <span class="hbadge"
+                        ><span
+                            class="hbadge-dot"
+                            style="background: var(--amber)"
+                        ></span
+                        >Apache-2.0</span
+                    >
+                    <span class="hbadge"
+                        ><span
+                            class="hbadge-dot"
+                            style="background: var(--muted)"
+                        ></span
+                        >v0.2.0-rc</span
+                    >
+                    <span class="hbadge"
+                        ><span
+                            class="hbadge-dot"
+                            style="background: var(--sky)"
+                        ></span
+                        >Node 18+</span
+                    >
+                </div>
+            </div>
+            <div class="hero-right">
+                <div class="sm-wrap">
+                    <div class="sm-title">Connection State Machine</div>
+                    <div class="sm-states">
+                        <div class="sm-row">
+                            <div class="sm-state">
+                                <div class="sm-dot gray"></div>
+                                <div>
+                                    <div class="sm-name">DISCONNECTED</div>
+                                    <div class="sm-desc">
+                                        idle · awaiting connect()
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div
+                            style="
+                                padding: 0.3rem 0 0.3rem 1.2rem;
+                                display: flex;
+                                align-items: center;
+                                gap: 0.4rem;
+                            "
+                        >
+                            <div
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.6rem;
+                                    color: var(--wa);
+                                    opacity: 0.5;
+                                "
+                            >
+                                ↓
+                            </div>
+                            <div
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.58rem;
+                                    color: var(--muted);
+                                "
+                            >
+                                client.connect()
+                            </div>
+                        </div>
+                        <div class="sm-row">
+                            <div class="sm-state warn">
+                                <div class="sm-dot amber"></div>
+                                <div>
+                                    <div class="sm-name">CONNECTING</div>
+                                    <div class="sm-desc">
+                                        WebSocket open · negotiating
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div
+                            style="
+                                padding: 0.3rem 0 0.3rem 1.2rem;
+                                display: flex;
+                                align-items: center;
+                                gap: 0.4rem;
+                            "
+                        >
+                            <div
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.6rem;
+                                    color: var(--wa);
+                                    opacity: 0.5;
+                                "
+                            >
+                                ↓
+                            </div>
+                            <div
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.58rem;
+                                    color: var(--muted);
+                                "
+                            >
+                                auth OK · session restored
+                            </div>
+                        </div>
+                        <div class="sm-row">
+                            <div class="sm-state current">
+                                <div class="sm-dot green"></div>
+                                <div>
+                                    <div class="sm-name">CONNECTED</div>
+                                    <div class="sm-desc">
+                                        messages flowing · circuit: CLOSED
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div
+                            style="
+                                padding: 0.3rem 0 0.3rem 1.2rem;
+                                display: flex;
+                                align-items: center;
+                                gap: 0.4rem;
+                            "
+                        >
+                            <div
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.6rem;
+                                    color: var(--red);
+                                    opacity: 0.6;
+                                "
+                            >
+                                ↓
+                            </div>
+                            <div
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.58rem;
+                                    color: var(--muted);
+                                "
+                            >
+                                disconnect event (401/405/515…)
+                            </div>
+                        </div>
+                        <div class="sm-row">
+                            <div class="sm-state warn">
+                                <div class="sm-dot amber"></div>
+                                <div>
+                                    <div class="sm-name">RECONNECTING</div>
+                                    <div class="sm-desc">
+                                        exp backoff · auto-recovery
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sm-cb-wrap">
+                        <div class="sm-cb-title">Circuit Breaker</div>
+                        <div class="sm-cb-states">
+                            <div class="sm-cb-state active-cb">
+                                CLOSED<br /><span
+                                    style="font-size: 0.55rem; opacity: 0.7"
+                                    >normal</span
+                                >
+                            </div>
+                            <div
+                                style="
+                                    display: flex;
+                                    align-items: center;
+                                    font-family: var(--font-mono);
+                                    font-size: 0.6rem;
+                                    color: var(--muted);
+                                    padding: 0 0.3rem;
+                                "
+                            >
+                                →
+                            </div>
+                            <div class="sm-cb-state open-cb">
+                                OPEN<br /><span
+                                    style="font-size: 0.55rem; opacity: 0.7"
+                                    >rate limit</span
+                                >
+                            </div>
+                            <div
+                                style="
+                                    display: flex;
+                                    align-items: center;
+                                    font-family: var(--font-mono);
+                                    font-size: 0.6rem;
+                                    color: var(--muted);
+                                    padding: 0 0.3rem;
+                                "
+                            >
+                                →
+                            </div>
+                            <div class="sm-cb-state half-cb">
+                                HALF<br /><span
+                                    style="font-size: 0.55rem; opacity: 0.7"
+                                    >probe</span
+                                >
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <div class="rule"></div>
+
+        <!-- STATUS + METRICS -->
+        <div class="sec" style="padding-top: 3rem; padding-bottom: 1rem">
+            <div class="ctr">
+                <div class="status-wrap rev">
+                    <span class="status-pill">v0.2.0-rc</span>
+                    <div class="status-text">
+                        <strong>End-to-end messaging complete — release candidate.</strong>
+                        <span class="status-done">
+                            ✔ Noise handshake · ✔ Signal Protocol · ✔ sendMessage ·
+                            ✔ recvMessage · ✔ Group ops · ✔ Auth stores · ✔
+                            Circuit breaker · ✔ Rate limiter · ✔ Middleware · ✔
+                            Prometheus</span
+                        >
+                        &nbsp;·&nbsp;
+                        <strong style="color: var(--wa)"
+                            >Gate:</strong
+                        >
+                        1h live smoke + echo bot verification
+                    </div>
+                </div>
+                <div class="metrics-row rev">
+                    <div class="metric">
+                        <div class="metric-n green" data-t="502">0</div>
+                        <div class="metric-l">Tests Passing</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-n" data-t="7">0</div>
+                        <div class="metric-l">Phase Layers</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-n" data-t="13">0</div>
+                        <div class="metric-l">Event Types</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-n" data-t="0">0</div>
+                        <div class="metric-l">Config Required</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rule"></div>
+
+        <!-- FEATURES -->
+        <div class="sec" id="features">
+            <div class="ctr">
+                <div class="eyebrow rev">Features</div>
+                <h2 class="sec-h rev">
+                    Built for the<br /><span style="color: var(--wa)"
+                        >infra you run.</span
+                    >
+                </h2>
+                <p class="sec-sub rev">
+                    Every production failure mode Baileys ignores — handled by
+                    default.
+                </p>
+                <div class="feat-matrix">
+                    <div class="feat-cell rev" style="--wa-c: var(--wa)">
+                        <div class="feat-icon">🔄</div>
+                        <h3>Connection State Machine</h3>
+                        <p>
+                            Every disconnect code mapped to a typed handler.
+                            401/403/405/463/515 — all handled, all recoverable
+                            where possible. Exponential backoff with
+                            configurable caps.
+                        </p>
+                        <div class="feat-mono">
+                            <span class="feat-tag">disconnected</span
+                            ><span class="feat-tag">connecting</span
+                            ><span class="feat-tag">reconnecting</span>
+                        </div>
+                    </div>
+                    <div class="feat-cell rev d1" style="--wa-c: var(--sky)">
+                        <div class="feat-icon">⚡</div>
+                        <h3>Circuit Breaker</h3>
+                        <p>
+                            Trips after sustained 405 rate limits.
+                            CLOSED→OPEN→HALF_OPEN→CLOSED. Probe attempts
+                            auto-recovery. Prevents the ban spirals that kill
+                            production bots overnight.
+                        </p>
+                        <div class="feat-mono">
+                            <span class="feat-tag">state events</span
+                            ><span class="feat-tag">probe-and-recover</span>
+                        </div>
+                    </div>
+                    <div class="feat-cell rev d2" style="--wa-c: var(--amber)">
+                        <div class="feat-icon">🗄️</div>
+                        <h3>Pluggable Auth</h3>
+                        <p>
+                            SQLiteAuthStore with WAL mode and atomic writes.
+                            MemoryAuthStore for tests. FileAuthStore for Baileys
+                            migration. One-call
+                            <code
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.85em;
+                                    color: var(--wa);
+                                "
+                                >migrateFromBaileys()</code
+                            >.
+                        </p>
+                        <div class="feat-mono">
+                            <span class="feat-tag">SQLite</span
+                            ><span class="feat-tag">Memory</span
+                            ><span class="feat-tag">File</span
+                            ><span class="feat-tag">Custom</span>
+                        </div>
+                    </div>
+                    <div class="feat-cell rev" style="--wa-c: var(--amber)">
+                        <div class="feat-icon">🪣</div>
+                        <h3>Token-Bucket Queue</h3>
+                        <p>
+                            Priority queue: urgent > high > normal > low.
+                            Human-like gaussian jitter. Dead-letter queue for
+                            permanent failures. 20 msg/min default — never
+                            triggers a ban.
+                        </p>
+                        <div class="feat-mono">
+                            <span class="feat-tag">4 priority levels</span
+                            ><span class="feat-tag">DLQ</span
+                            ><span class="feat-tag">jitter</span>
+                        </div>
+                    </div>
+                    <div class="feat-cell rev d1" style="--wa-c: var(--sky)">
+                        <div class="feat-icon">🧩</div>
+                        <h3>Koa-Style Middleware</h3>
+                        <p>
+                            Composable pipeline via
+                            <code
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.85em;
+                                    color: var(--wa);
+                                "
+                                >client.use()</code
+                            >. Built-ins: LID resolver, anti-ban delay, message
+                            logger. Write your own handler in 5 lines.
+                        </p>
+                        <div class="feat-mono">
+                            <span class="feat-tag">lidResolver()</span
+                            ><span class="feat-tag">antiBan()</span
+                            ><span class="feat-tag">messageLogger()</span>
+                        </div>
+                    </div>
+                    <div class="feat-cell rev d2" style="--wa-c: var(--red)">
+                        <div class="feat-icon">📊</div>
+                        <h3>Prometheus Observability</h3>
+                        <p>
+                            Built-in
+                            <code
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.85em;
+                                    color: var(--wa);
+                                "
+                                >/health</code
+                            >
+                            and
+                            <code
+                                style="
+                                    font-family: var(--font-mono);
+                                    font-size: 0.85em;
+                                    color: var(--wa);
+                                "
+                                >/metrics</code
+                            >
+                            HTTP endpoints. Queue depth, circuit breaker state,
+                            reconnect count, message throughput — all exported
+                            as Prometheus gauges.
+                        </p>
+                        <div class="feat-mono">
+                            <span class="feat-tag">/health</span
+                            ><span class="feat-tag">/metrics</span
+                            ><span class="feat-tag">Grafana-ready</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rule"></div>
+
+        <!-- LIVE DEMO TERMINAL -->
+        <div class="sec" id="demo">
+            <div class="ctr">
+                <div class="eyebrow rev">Live Demo</div>
+                <h2 class="sec-h rev">
+                    Every scenario,<br /><span style="color: var(--wa)"
+                        >live output.</span
+                    >
+                </h2>
+                <p class="sec-sub rev">
+                    Click a scenario. See the real terminal output. No sanitized
+                    demos — this is exactly what you get in production.
+                </p>
+                <div class="terminal-wrap rev">
+                    <div class="terminal-sidebar" id="tSidebar">
+                        <div
+                            class="t-scenario on"
+                            onclick="setScene('connect', this)"
+                            data-title="connect.ts — node"
+                        >
+                            <span class="t-scenario-icon">🚀</span> connect
+                        </div>
+                        <div
+                            class="t-scenario"
+                            onclick="setScene('auth', this)"
+                            data-title="migrate.ts — node"
+                        >
+                            <span class="t-scenario-icon">🔐</span> auth migrate
+                        </div>
+                        <div
+                            class="t-scenario"
+                            onclick="setScene('middleware', this)"
+                            data-title="middleware.ts — node"
+                        >
+                            <span class="t-scenario-icon">🧩</span> middleware
+                        </div>
+                        <div
+                            class="t-scenario"
+                            onclick="setScene('queue', this)"
+                            data-title="queue-demo.ts — node"
+                        >
+                            <span class="t-scenario-icon">📬</span> queue + rate
+                            limit
+                        </div>
+                        <div
+                            class="t-scenario"
+                            onclick="setScene('errors', this)"
+                            data-title="error-recovery.ts — node"
+                        >
+                            <span class="t-scenario-icon">🛡️</span> error
+                            recovery
+                        </div>
+                        <div
+                            class="t-scenario"
+                            onclick="setScene('metrics', this)"
+                            data-title="metrics.sh — bash"
+                        >
+                            <span class="t-scenario-icon">📊</span> /health +
+                            /metrics
+                        </div>
+                    </div>
+                    <div class="terminal-main">
+                        <div class="term-bar">
+                            <div class="tdot" style="background: #ff5f56"></div>
+                            <div class="tdot" style="background: #ffbd2e"></div>
+                            <div class="tdot" style="background: #27c93f"></div>
+                            <span class="term-title" id="tTitle"
+                                >connect.ts — node</span
+                            >
+                        </div>
+                        <div class="term-body" id="tBody">
+                            <button class="tcopy" onclick="copyTerm(this)">
+                                ⌘ Copy
+                            </button>
+
+                            <!-- CONNECT -->
+                            <div class="tpanel on" id="sc-connect">
+                                <div>
+                                    <span class="tp">$</span
+                                    ><span class="tc"
+                                        >npx ts-node connect.ts</span
+                                    >
+                                </div>
+                                <div class="to">
+                                    ⠸ Initializing SQLiteAuthStore…
+                                </div>
+                                <div class="ts">
+                                    ✔ nexawhats.db opened · WAL mode · atomic
+                                    writes
+                                </div>
+                                <div class="to">⠸ Loading auth state…</div>
+                                <div class="ts">
+                                    ✔ Credentials found — no QR needed
+                                </div>
+                                <div class="to">
+                                    ⠸ Connecting to WhatsApp Web…
+                                </div>
+                                <div class="to">
+                                    → State: DISCONNECTED → CONNECTING
+                                </div>
+                                <div class="ts">✔ WebSocket established</div>
+                                <div class="to">
+                                    ⠸ Version negotiation (2.3000.1023)…
+                                </div>
+                                <div class="ts">
+                                    ✔ State: CONNECTING → CONNECTED
+                                </div>
+                                <div class="tblk">
+                                    <div
+                                        style="
+                                            color: var(--text);
+                                            font-weight: 600;
+                                            margin-bottom: 0.3rem;
+                                        "
+                                    >
+                                        connection.update { connection: 'open' }
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        isNewLogin: false
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        receivedPendingNotifications: true
+                                    </div>
+                                    <div style="color: var(--sky)">
+                                        circuit-breaker: CLOSED · queue-depth: 0
+                                    </div>
+                                </div>
+                                <div class="ts">
+                                    ✔ Ready · /health → {"status":"healthy"}
+                                </div>
+                                <div><span class="tcur">▋</span></div>
+                            </div>
+
+                            <!-- AUTH -->
+                            <div class="tpanel" id="sc-auth">
+                                <div>
+                                    <span class="tp">$</span
+                                    ><span class="tc"
+                                        >npx ts-node migrate.ts --from
+                                        ./auth_info_multi</span
+                                    >
+                                </div>
+                                <div class="to">
+                                    ⠸ Scanning Baileys auth_info_multi/…
+                                </div>
+                                <div class="ts">✔ creds.json found</div>
+                                <div class="ts">
+                                    ✔ 23 Signal Protocol key files found
+                                </div>
+                                <div class="to">
+                                    ⠸ Running migrateFromBaileys(store)…
+                                </div>
+                                <div class="tblk">
+                                    <div
+                                        style="
+                                            color: var(--text);
+                                            font-weight: 600;
+                                            margin-bottom: 0.35rem;
+                                        "
+                                    >
+                                        Migration complete:
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        ✔ creds → store.saveCreds()
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        ✔ app-state-sync → 23 keys migrated
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        ✔ pre-key store → LRU cache warmed
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        ✔ session keys → Signal store ready
+                                    </div>
+                                </div>
+                                <div class="ts">
+                                    ✔ Connecting with migrated session…
+                                </div>
+                                <div class="ts">
+                                    ✔ State: CONNECTED — no re-scan needed
+                                </div>
+                                <div><span class="tcur">▋</span></div>
+                            </div>
+
+                            <!-- MIDDLEWARE -->
+                            <div class="tpanel" id="sc-middleware">
+                                <div>
+                                    <span class="tp">$</span
+                                    ><span class="tc"
+                                        >npx ts-node middleware.ts</span
+                                    >
+                                </div>
+                                <div class="ts">
+                                    ✔ client.use(lidResolver())
+                                </div>
+                                <div class="ts">
+                                    ✔ client.use(antiBan({ min: 1000, max: 3000
+                                    }))
+                                </div>
+                                <div class="ts">
+                                    ✔ client.use(messageLogger())
+                                </div>
+                                <div class="ts">✔ client.use(myAutoReply)</div>
+                                <div
+                                    style="
+                                        margin-top: 0.4rem;
+                                        color: var(--muted2);
+                                        font-size: 0.7rem;
+                                    "
+                                >
+                                    ─── incoming message ───
+                                </div>
+                                <div class="tw">
+                                    ⚠ Raw JID: 197151900590225@lid → resolving…
+                                </div>
+                                <div class="ts">
+                                    ✔ lidResolver → 923124166950@s.whatsapp.net
+                                </div>
+                                <div class="tblk">
+                                    <div
+                                        style="
+                                            color: var(--text);
+                                            font-weight: 600;
+                                            margin-bottom: 0.3rem;
+                                        "
+                                    >
+                                        ctx after pipeline:
+                                    </div>
+                                    <div style="color: var(--sky)">
+                                        phone → "923124166950"
+                                    </div>
+                                    <div style="color: var(--sky)">
+                                        senderName → "Ahmad Raza"
+                                    </div>
+                                    <div style="color: var(--sky)">
+                                        text → "is this working?"
+                                    </div>
+                                    <div style="color: var(--sky)">
+                                        isGroup → false
+                                    </div>
+                                </div>
+                                <div class="to">⠸ antiBan sleeping 1923ms…</div>
+                                <div class="ts">
+                                    ✔ myAutoReply → queued (priority: normal)
+                                </div>
+                                <div class="ts">
+                                    ✔ sent → "Hello from NexaWhats!"
+                                </div>
+                                <div><span class="tcur">▋</span></div>
+                            </div>
+
+                            <!-- QUEUE -->
+                            <div class="tpanel" id="sc-queue">
+                                <div>
+                                    <span class="tp">$</span
+                                    ><span class="tc"
+                                        >npx ts-node queue-demo.ts --n=50</span
+                                    >
+                                </div>
+                                <div class="ts">
+                                    ✔ Token bucket: 20/min · humanLikeTiming:
+                                    true
+                                </div>
+                                <div class="to">
+                                    ⠸ Enqueue: 1 urgent · 5 high · 44 normal
+                                </div>
+                                <div class="tblk">
+                                    <div
+                                        style="
+                                            color: var(--text);
+                                            font-weight: 600;
+                                            margin-bottom: 0.35rem;
+                                        "
+                                    >
+                                        Drain order (priority):
+                                    </div>
+                                    <div style="color: var(--red)">
+                                        🔴 URGENT admin@s.w.net +0ms
+                                    </div>
+                                    <div style="color: var(--amber)">
+                                        🟠 HIGH vip-1@s.w.net +1923ms
+                                    </div>
+                                    <div style="color: var(--amber)">
+                                        🟠 HIGH vip-2@s.w.net +3847ms
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        🟢 NORMAL user-1@s.w.net +5441ms
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        🟢 NORMAL user-2@s.w.net +7882ms
+                                    </div>
+                                    <div style="color: var(--muted2)">
+                                        … 43 more · avg interval 2991ms
+                                    </div>
+                                </div>
+                                <div class="ts">
+                                    ✔ 0 dead-letter · 0 rate-limit codes
+                                </div>
+                                <div class="ts">✔ queue.drained emitted</div>
+                                <div><span class="tcur">▋</span></div>
+                            </div>
+
+                            <!-- ERRORS -->
+                            <div class="tpanel" id="sc-errors">
+                                <div>
+                                    <span class="tp">$</span
+                                    ><span class="tc"
+                                        >npx ts-node error-recovery.ts</span
+                                    >
+                                </div>
+                                <div class="tw">
+                                    ⚠ WA code 405 — rate limited
+                                </div>
+                                <div class="to">
+                                    → circuit-breaker: CLOSED → OPEN (3
+                                    failures)
+                                </div>
+                                <div class="to">
+                                    ⠸ Backing off 32000ms (attempt 3 of 5)
+                                </div>
+                                <div class="tblk">
+                                    <div
+                                        style="
+                                            color: var(--amber);
+                                            font-weight: 600;
+                                            margin-bottom: 0.3rem;
+                                        "
+                                    >
+                                        instanceof RateLimitError:
+                                    </div>
+                                    <div style="color: var(--amber)">
+                                        retryAfterMs → 32000
+                                    </div>
+                                    <div style="color: var(--amber)">
+                                        code → "WA_405"
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        recoverable → true
+                                    </div>
+                                </div>
+                                <div class="to">
+                                    → circuit-breaker: OPEN → HALF_OPEN
+                                </div>
+                                <div class="to">⠸ Probe attempt…</div>
+                                <div class="ts">
+                                    ✔ Probe succeeded — circuit-breaker: CLOSED
+                                </div>
+                                <div class="ts">
+                                    ✔ Queued messages replaying (12 pending)
+                                </div>
+                                <div><span class="tcur">▋</span></div>
+                            </div>
+
+                            <!-- METRICS -->
+                            <div class="tpanel" id="sc-metrics">
+                                <div>
+                                    <span class="tp">$</span
+                                    ><span class="tc"
+                                        >curl -s localhost:3000/health |
+                                        jq</span
+                                    >
+                                </div>
+                                <div class="tblk">
+                                    <div style="color: var(--wa)">
+                                        status:
+                                        <span style="color: var(--text)"
+                                            >"healthy"</span
+                                        >
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        connection:
+                                        <span style="color: var(--text)"
+                                            >"open"</span
+                                        >
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        circuitBreaker:
+                                        <span style="color: var(--text)"
+                                            >"CLOSED"</span
+                                        >
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        queueDepth:
+                                        <span style="color: var(--text)"
+                                            >3</span
+                                        >
+                                    </div>
+                                    <div style="color: var(--wa)">
+                                        uptime:
+                                        <span style="color: var(--text)"
+                                            >86412</span
+                                        >
+                                    </div>
+                                </div>
+                                <div>
+                                    <span class="tp">$</span
+                                    ><span class="tc"
+                                        >curl -s localhost:3000/metrics | grep
+                                        nexawhats</span
+                                    >
+                                </div>
+                                <div class="tblk">
+                                    <div style="color: var(--muted2)">
+                                        nexawhats_messages_sent_total 1402
+                                    </div>
+                                    <div style="color: var(--muted2)">
+                                        nexawhats_queue_depth 3
+                                    </div>
+                                    <div style="color: var(--muted2)">
+                                        nexawhats_circuit_breaker_open 0
+                                    </div>
+                                    <div style="color: var(--muted2)">
+                                        nexawhats_reconnects_total 2
+                                    </div>
+                                    <div style="color: var(--muted2)">
+                                        nexawhats_dead_letter_total 0
+                                    </div>
+                                </div>
+                                <div class="ts">
+                                    ✔ Prometheus scrape target ready
+                                </div>
+                                <div><span class="tcur">▋</span></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rule"></div>
+
+        <!-- AUTH STORES -->
+        <div class="sec" id="stores">
+            <div class="ctr">
+                <div class="eyebrow rev">Auth Stores</div>
+                <h2 class="sec-h rev">
+                    No more<br /><span style="color: var(--wa)"
+                        >JSON corruption.</span
+                    >
+                </h2>
+                <p class="sec-sub rev">
+                    Atomic writes. Crash-safe. Pluggable. One interface, three
+                    implementations.
+                </p>
+                <div class="store-row">
+                    <div
+                        class="store-card rev"
+                        style="
+                            --sc: var(--wa);
+                            --sb-color: var(--wa);
+                            --sb-bg: rgba(37, 211, 102, 0.08);
+                            --sb-border: rgba(37, 211, 102, 0.2);
+                        "
+                    >
+                        <div class="store-badge">★ Production</div>
+                        <h3>SQLiteAuthStore</h3>
+                        <p>
+                            WAL mode, atomic writes, crash-safe. Zero external
+                            dependencies beyond
+                            <code
+                                style="
+                                    font-family: var(--font-mono);
+                                    color: var(--wa);
+                                    font-size: 0.85em;
+                                "
+                                >better-sqlite3</code
+                            >. The default for any real deployment.
+                        </p>
+                        <div class="store-snippet">
+                            <span class="kw">import</span> { SQLiteAuthStore }
+                            <span class="kw">from</span>
+                            <span class="st">'nexawhats/store'</span>;
+                            <span class="kw">const</span> store =
+                            <span class="kw">new</span>
+                            <span class="fn">SQLiteAuthStore</span>(<span
+                                class="st"
+                                >'./auth.db'</span
+                            >); <span class="kw">const</span> state =
+                            <span class="kw">await</span> store.<span class="fn"
+                                >loadState</span
+                            >();
+                        </div>
+                    </div>
+                    <div
+                        class="store-card rev d1"
+                        style="
+                            --sc: var(--sky);
+                            --sb-color: var(--sky);
+                            --sb-bg: rgba(56, 189, 248, 0.08);
+                            --sb-border: rgba(56, 189, 248, 0.2);
+                        "
+                    >
+                        <div
+                            class="store-badge"
+                            style="
+                                --sb-color: var(--sky);
+                                --sb-bg: rgba(56, 189, 248, 0.08);
+                                --sb-border: rgba(56, 189, 248, 0.2);
+                            "
+                        >
+                            Testing
+                        </div>
+                        <h3>MemoryAuthStore</h3>
+                        <p>
+                            No persistence. Perfect for CI pipelines, unit
+                            tests, and ephemeral bots. Drop-in anywhere
+                            SQLiteAuthStore works.
+                        </p>
+                        <div class="store-snippet">
+                            <span class="kw">import</span> { MemoryAuthStore }
+                            <span class="kw">from</span>
+                            <span class="st">'nexawhats'</span>;
+                            <span class="kw">const</span> store =
+                            <span class="kw">new</span>
+                            <span class="fn">MemoryAuthStore</span>();
+                            <span class="cm"
+                                >// no files · no cleanup · instant</span
+                            >
+                        </div>
+                    </div>
+                    <div
+                        class="store-card rev d2"
+                        style="
+                            --sc: var(--amber);
+                            --sb-color: var(--amber);
+                            --sb-bg: rgba(245, 158, 11, 0.08);
+                            --sb-border: rgba(245, 158, 11, 0.2);
+                        "
+                    >
+                        <div
+                            class="store-badge"
+                            style="
+                                --sb-color: var(--amber);
+                                --sb-bg: rgba(245, 158, 11, 0.08);
+                                --sb-border: rgba(245, 158, 11, 0.2);
+                            "
+                        >
+                            Migration
+                        </div>
+                        <h3>FileAuthStore</h3>
+                        <p>
+                            Baileys-compatible format. Use
+                            <code
+                                style="
+                                    font-family: var(--font-mono);
+                                    color: var(--wa);
+                                    font-size: 0.85em;
+                                "
+                                >migrateFromBaileys()</code
+                            >
+                            to move existing sessions in one call — zero
+                            re-scan, zero QR.
+                        </p>
+                        <div class="store-snippet">
+                            <span class="kw">await</span>
+                            <span class="fn">migrateFromBaileys</span>(
+                            <span class="st">'./auth_info_multi'</span>, store
+                            <span class="cm">// target SQLiteAuthStore</span>
+                            );
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rule"></div>
+
+        <!-- EVENTS TABLE -->
+        <div class="sec" id="events">
+            <div class="ctr">
+                <div class="eyebrow rev">Events</div>
+                <h2 class="sec-h rev">
+                    Every signal,<br /><span style="color: var(--wa)"
+                        >fully typed.</span
+                    >
+                </h2>
+                <p class="sec-sub rev">
+                    Discriminated unions. No
+                    <code
+                        style="font-family: var(--font-mono); color: var(--wa)"
+                        >any</code
+                    >. IDE autocomplete on every event handler you write.
+                </p>
+                <div class="evt-table rev">
+                    <div class="evt-row hdr">
+                        <div>Event</div>
+                        <div>Payload Type</div>
+                        <div>Description</div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">connection.update</div>
+                        <div class="evt-type">
+                            Partial&lt;ConnectionState&gt;
+                        </div>
+                        <div class="evt-desc">
+                            State change, QR code, logout reason
+                        </div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">messages.upsert</div>
+                        <div class="evt-type">{ messages, type }</div>
+                        <div class="evt-desc">
+                            Incoming messages — notify or append
+                        </div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">messages.update</div>
+                        <div class="evt-type">WAMessageUpdate[]</div>
+                        <div class="evt-desc">
+                            Edits, deletions, delivery receipts
+                        </div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">messages.reaction</div>
+                        <div class="evt-type">{ key, reaction }[]</div>
+                        <div class="evt-desc">Reaction added or removed</div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">groups.upsert</div>
+                        <div class="evt-type">GroupMetadata[]</div>
+                        <div class="evt-desc">Joined a new group</div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">group-participants.update</div>
+                        <div class="evt-type">{ id, participants, action }</div>
+                        <div class="evt-desc">
+                            Member add/remove/promote/demote
+                        </div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">presence.update</div>
+                        <div class="evt-type">{ id, presences }</div>
+                        <div class="evt-desc">
+                            Typing indicator, online status
+                        </div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">queue.drained</div>
+                        <div class="evt-type">void</div>
+                        <div class="evt-desc">All queued messages sent</div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">queue.dead-letter</div>
+                        <div class="evt-type">{ jid, content, error }</div>
+                        <div class="evt-desc">Message permanently failed</div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">circuit-breaker.state-change</div>
+                        <div class="evt-type">{ from, to }</div>
+                        <div class="evt-desc">CLOSED ↔ OPEN ↔ HALF_OPEN</div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">creds.update</div>
+                        <div class="evt-type">Partial&lt;AuthCreds&gt;</div>
+                        <div class="evt-desc">Save credentials on change</div>
+                    </div>
+                    <div class="evt-row">
+                        <div class="evt-name">call</div>
+                        <div class="evt-type">WACallEvent[]</div>
+                        <div class="evt-desc">Incoming voice or video call</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="rule"></div>
+
+        <!-- COMPARE -->
+        <div class="sec" id="compare">
+            <div class="ctr">
+                <div class="eyebrow rev">Comparison</div>
+                <h2 class="sec-h rev">
+                    Why not<br /><span style="color: var(--wa)">Baileys?</span>
+                </h2>
+                <p class="sec-sub rev">
+                    Every production pain point addressed by design — not
+                    patched after the fact.
+                </p>
+                <div class="compare-wrap rev">
+                    <table class="compare-table">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th class="hl hl-t" style="color: var(--wa)">
+                                    NexaWhats
+                                </th>
+                                <th>Baileys</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Connection handling</td>
+                                <td class="hl ck">
+                                    State machine + circuit breaker
+                                </td>
+                                <td class="cp">Basic reconnect, manual 405</td>
+                            </tr>
+                            <tr>
+                                <td>Auth storage</td>
+                                <td class="hl ck">
+                                    SQLite / Memory / File (atomic)
+                                </td>
+                                <td class="cp">
+                                    JSON files — not production-safe
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>Rate limiting</td>
+                                <td class="hl ck">
+                                    Token bucket + gaussian jitter
+                                </td>
+                                <td class="cx">—</td>
+                            </tr>
+                            <tr>
+                                <td>LID handling</td>
+                                <td class="hl ck">
+                                    Auto-resolution middleware
+                                </td>
+                                <td class="cp">Inconsistent, manual</td>
+                            </tr>
+                            <tr>
+                                <td>Middleware</td>
+                                <td class="hl ck">Koa-style pipeline</td>
+                                <td class="cp">Flat EventEmitter</td>
+                            </tr>
+                            <tr>
+                                <td>Anti-ban</td>
+                                <td class="hl ck">
+                                    Built-in gaussian jitter + warm-up
+                                </td>
+                                <td class="cx">—</td>
+                            </tr>
+                            <tr>
+                                <td>Observability</td>
+                                <td class="hl ck">
+                                    Prometheus + /health + /metrics
+                                </td>
+                                <td class="cp">Pino logger only</td>
+                            </tr>
+                            <tr>
+                                <td>Type safety</td>
+                                <td class="hl ck">
+                                    Discriminated unions, zero any
+                                </td>
+                                <td class="cp">Deep optional nesting</td>
+                            </tr>
+                            <tr>
+                                <td>Memory leaks</td>
+                                <td class="hl ck">Bounded caches + WeakRef</td>
+                                <td class="cp">~0.1MB/message</td>
+                            </tr>
+                            <tr>
+                                <td>v7 stability</td>
+                                <td class="hl ck hl-b">Stable releases</td>
+                                <td class="cp">Stuck in broken RCs</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="rule"></div>
+
+        <!-- QUICK START -->
+        <div class="sec" id="quickstart">
+            <div class="ctr">
+                <div class="eyebrow rev">Quick Start</div>
+                <h2 class="sec-h rev">
+                    Up in<br /><span style="color: var(--wa)">60 seconds.</span>
+                </h2>
+                <p class="sec-sub rev">
+                    Install, create a client, handle messages. That's it.
+                </p>
+                <div class="qs-grid">
+                    <div class="qs-steps rev">
+                        <div class="qs-step">
+                            <div class="qs-n">1</div>
+                            <div>
+                                <h4>Install</h4>
+                                <p>
+                                    <code
+                                        style="
+                                            font-family: var(--font-mono);
+                                            color: var(--wa);
+                                            font-size: 0.85em;
+                                        "
+                                        >npm install nexawhats</code
+                                    >
+                                    +
+                                    <code
+                                        style="
+                                            font-family: var(--font-mono);
+                                            color: var(--wa);
+                                            font-size: 0.85em;
+                                        "
+                                        >better-sqlite3</code
+                                    >
+                                    for the production auth store.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="qs-step">
+                            <div class="qs-n">2</div>
+                            <div>
+                                <h4>Create a client</h4>
+                                <p>
+                                    Pass your auth store and queue config. All
+                                    options have sensible defaults. Add
+                                    middleware with
+                                    <code
+                                        style="
+                                            font-family: var(--font-mono);
+                                            color: var(--wa);
+                                            font-size: 0.85em;
+                                        "
+                                        >client.use()</code
+                                    >.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="qs-step">
+                            <div class="qs-n">3</div>
+                            <div>
+                                <h4>Connect &amp; handle</h4>
+                                <p>
+                                    Call
+                                    <code
+                                        style="
+                                            font-family: var(--font-mono);
+                                            color: var(--wa);
+                                            font-size: 0.85em;
+                                        "
+                                        >client.connect()</code
+                                    >. First run shows a QR — scan once, session
+                                    persists automatically via the auth store.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="qs-step">
+                            <div class="qs-n">4</div>
+                            <div>
+                                <h4>Listen on events</h4>
+                                <p>
+                                    Use
+                                    <code
+                                        style="
+                                            font-family: var(--font-mono);
+                                            color: var(--wa);
+                                            font-size: 0.85em;
+                                        "
+                                        >client.on('messages.upsert')</code
+                                    >
+                                    or plug in middleware. Both patterns coexist
+                                    cleanly.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="rev d1">
+                        <div class="code-win">
+                            <div class="code-bar">
+                                <div
+                                    class="tdot"
+                                    style="background: #ff5f56"
+                                ></div>
+                                <div
+                                    class="tdot"
+                                    style="background: #ffbd2e"
+                                ></div>
+                                <div
+                                    class="tdot"
+                                    style="background: #27c93f"
+                                ></div>
+                                <span class="code-file">index.ts</span>
+                            </div>
+                            <div class="code-body">
+                                <span class="kw">import</span> { createClient,
+                                MemoryAuthStore } <span class="kw">from</span>
+                                <span class="st">'nexawhats'</span>;
+
+                                <span class="cm"
+                                    >// 1. Auth store (SQLiteAuthStore in
+                                    production)</span
+                                >
+                                <span class="kw">const</span> store =
+                                <span class="kw">new</span>
+                                <span class="fn">MemoryAuthStore</span>();
+                                <span class="kw">const</span> state =
+                                <span class="kw">await</span> store.<span
+                                    class="fn"
+                                    >loadState</span
+                                >();
+
+                                <span class="cm">// 2. Create client</span>
+                                <span class="kw">const</span> client =
+                                <span class="fn">createClient</span>({ auth:
+                                state ?? { creds: {}, keys: store }, queue: {
+                                messagesPerMinute: <span class="op">20</span>,
+                                humanLikeTiming: <span class="kw">true</span> },
+                                });
+
+                                <span class="cm">// 3. Middleware</span>
+                                client.<span class="fn">use</span>(<span
+                                    class="kw"
+                                    >async</span
+                                >
+                                (ctx, next) =&gt; { console.<span class="fn"
+                                    >log</span
+                                >(<span class="st"
+                                    >`${ctx.senderName}: ${ctx.text}`</span
+                                >); <span class="kw">await</span>
+                                <span class="fn">next</span>(); });
+
+                                <span class="cm">// 4. Handle messages</span>
+                                client.<span class="fn">on</span>(<span
+                                    class="st"
+                                    >'messages.upsert'</span
+                                >, <span class="kw">async</span> ({ messages,
+                                type }) =&gt; { <span class="kw">if</span> (type
+                                !== <span class="st">'notify'</span>)
+                                <span class="kw">return</span>;
+                                <span class="kw">for</span> (<span class="kw"
+                                    >const</span
+                                >
+                                msg <span class="kw">of</span> messages) {
+                                <span class="kw">if</span> (msg.key.fromMe)
+                                <span class="kw">continue</span>;
+                                <span class="kw">await</span> client.<span
+                                    class="fn"
+                                    >send</span
+                                >(msg.key.remoteJid!, { text:
+                                <span class="st">'Hello from NexaWhats!'</span>
+                                }); } });
+
+                                <span class="cm">// 5. Connect</span>
+                                <span class="kw">await</span> client.<span
+                                    class="fn"
+                                    >connect</span
+                                >();
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- FOOTER CTA -->
+        <div class="footer-cta">
+            <div class="fcta-inner">
+                <div
+                    class="eyebrow"
+                    style="justify-content: center; margin-bottom: 1.25rem"
+                >
+                    Apache-2.0 · Free & open source
+                </div>
+                <div class="fcta-h">
+                    <span>STOP</span><br />
+                    <span style="color: var(--wa)">FIGHTING</span><br />
+                    <span>BAILEYS.</span>
+                </div>
+                <p class="fcta-sub">
+                    Production-grade WhatsApp infrastructure. Circuit breaker
+                    included. Prometheus metrics included. Atomic auth included.
+                </p>
+                <div
+                    style="
+                        display: flex;
+                        justify-content: center;
+                        gap: 0.75rem;
+                        flex-wrap: wrap;
+                    "
+                >
+                    <a class="btn-wa" href="#quickstart">
+                        <svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.5"
+                        >
+                            <polyline points="9 18 15 12 9 6" />
+                        </svg>
+                        Get Started Free
+                    </a>
+                    <a
+                        class="btn-outline"
+                        href="https://github.com"
+                        target="_blank"
+                    >
+                        <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="currentColor"
+                        >
+                            <path
+                                d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.79-.26.79-.58v-2.23c-3.34.73-4.03-1.42-4.03-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49 1 .11-.78.42-1.31.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23.96-.27 1.98-.4 3-.4 1.02 0 2.05.13 3 .4 2.29-1.55 3.3-1.23 3.3-1.23.66 1.65.24 2.87.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.48 5.92.43.37.82 1.1.82 2.22v3.29c0 .32.19.7.8.58C20.57 21.8 24 17.3 24 12 24 5.37 18.63 0 12 0z"
+                            />
+                        </svg>
+                        Star on GitHub
+                    </a>
+                </div>
+                <div class="fcta-note">
+                    Not affiliated with or endorsed by WhatsApp LLC or Meta
+                    Platforms Inc.<br />
+                    Use responsibly. Review WhatsApp's Terms of Service before
+                    deploying.
+                </div>
+            </div>
+        </div>
+
+        <!-- FOOTER -->
+        <footer>
+            <div class="nav-logo">
+                <div class="nav-logo-mark">NW</div>
+                <span>Nexa<em>Whats</em></span>
+            </div>
+            <ul class="footer-links">
+                <li><a href="https://github.com" target="_blank">GitHub</a></li>
+                <li><a href="https://npmjs.com" target="_blank">npm</a></li>
+                <li><a href="#">Apache-2.0</a></li>
+                <li><a href="#">Disclaimer</a></li>
+                <li><a href="#">Issues</a></li>
+            </ul>
+            <p>Built for production. Not affiliated with WhatsApp LLC.</p>
+        </footer>
+
+        <script>
+            // scroll progress
+            window.addEventListener(
+                "scroll",
+                () => {
+                    const h =
+                        document.documentElement.scrollHeight -
+                        window.innerHeight;
+                    document.getElementById("sp").style.width =
+                        (window.scrollY / h) * 100 + "%";
+                },
+                { passive: true },
+            );
+
+            // nav scroll
+            window.addEventListener(
+                "scroll",
+                () => {
+                    document.getElementById("nav").style.borderBottomColor =
+                        window.scrollY > 30
+                            ? "rgba(255,255,255,0.09)"
+                            : "rgba(255,255,255,0.06)";
+                },
+                { passive: true },
+            );
+
+            // nav active
+            const navObs = new IntersectionObserver(
+                (entries) => {
+                    entries.forEach((e) => {
+                        if (e.isIntersecting) {
+                            document
+                                .querySelectorAll(".nav-center a")
+                                .forEach((a) => a.classList.remove("on"));
+                            const lnk = document.querySelector(
+                                `.nav-center a[href="#${e.target.id}"]`,
+                            );
+                            if (lnk) lnk.classList.add("on");
+                        }
+                    });
+                },
+                { threshold: 0.25, rootMargin: "-52px 0px -40% 0px" },
+            );
+            [
+                "features",
+                "demo",
+                "stores",
+                "events",
+                "compare",
+                "quickstart",
+            ].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) navObs.observe(el);
+            });
+
+            // mobile menu
+            document
+                .getElementById("navHam")
+                .addEventListener("click", function () {
+                    this.classList.toggle("open");
+                    document.getElementById("mobMenu").classList.toggle("open");
+                });
+            function closeMob() {
+                document.getElementById("navHam").classList.remove("open");
+                document.getElementById("mobMenu").classList.remove("open");
+            }
+
+            // reveal
+            const revObs = new IntersectionObserver(
+                (entries) => {
+                    entries.forEach((e) => {
+                        if (e.isIntersecting) {
+                            e.target.classList.remove("pre");
+                            e.target.classList.add("in");
+                        }
+                    });
+                },
+                { threshold: 0, rootMargin: "0px 0px -60px 0px" },
+            );
+            document.querySelectorAll(".rev").forEach((el) => {
+                el.classList.add("pre");
+                revObs.observe(el);
+            });
+
+            // counter
+            const cntObs = new IntersectionObserver(
+                (entries) => {
+                    entries.forEach((e) => {
+                        if (e.isIntersecting) {
+                            e.target
+                                .querySelectorAll("[data-t]")
+                                .forEach((el) => {
+                                    const target = +el.dataset.t;
+                                    if (target === 0) {
+                                        el.textContent = "0";
+                                        return;
+                                    }
+                                    let cur = 0;
+                                    const step = Math.ceil(target / 60);
+                                    const t = setInterval(() => {
+                                        cur = Math.min(cur + step, target);
+                                        el.textContent = cur;
+                                        if (cur >= target) clearInterval(t);
+                                    }, 16);
+                                });
+                            cntObs.unobserve(e.target);
+                        }
+                    });
+                },
+                { threshold: 0.4 },
+            );
+            document
+                .querySelectorAll(".metrics-row")
+                .forEach((g) => cntObs.observe(g));
+
+            // terminal scenario switcher
+            function setScene(name, btn) {
+                document
+                    .querySelectorAll(".t-scenario")
+                    .forEach((b) => b.classList.remove("on"));
+                document
+                    .querySelectorAll(".tpanel")
+                    .forEach((p) => p.classList.remove("on"));
+                btn.classList.add("on");
+                const panel = document.getElementById("sc-" + name);
+                const body = document.getElementById("tBody");
+                const title = document.getElementById("tTitle");
+                if (panel) {
+                    panel.style.opacity = "0";
+                    panel.style.transform = "translateY(5px)";
+                    panel.classList.add("on");
+                    requestAnimationFrame(() =>
+                        requestAnimationFrame(() => {
+                            panel.style.transition =
+                                "opacity .2s ease,transform .2s ease";
+                            panel.style.opacity = "1";
+                            panel.style.transform = "translateY(0)";
+                        }),
+                    );
+                    body.scrollTop = 0;
+                }
+                if (title) title.textContent = btn.dataset.title || name;
+            }
+
+            // copy terminal
+            function copyTerm(btn) {
+                const panel = document.querySelector(".tpanel.on");
+                if (!panel) return;
+                navigator.clipboard
+                    .writeText(panel.innerText.trim())
+                    .then(() => {
+                        showToast("✓ Copied");
+                        btn.textContent = "✓ Copied!";
+                        setTimeout(() => (btn.textContent = "⌘ Copy"), 1800);
+                    });
+            }
+
+            // toast
+            const toastEl = document.getElementById("toast");
+            function showToast(m) {
+                toastEl.textContent = m;
+                toastEl.classList.add("show");
+                setTimeout(() => toastEl.classList.remove("show"), 2000);
+            }
+        </script>
+    </body>
+</html>
