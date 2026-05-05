@@ -15,11 +15,17 @@ export {
   extractAddressingContext,
   getChatId,
   isRealMessage,
+  decryptPollVote,
+  decryptEventResponse,
+  extractEncryptedPollVote,
+  extractEncryptedEventResponse,
   NO_MESSAGE_FOUND_ERROR_TEXT,
   DECRYPTION_RETRY_CONFIG,
   type AddressingContext,
   type DecodedMessage,
   type DecryptableMessage,
+  type PollVoteContext,
+  type EventResponseContext,
 } from './recv.js';
 export {
   extractText,
@@ -40,6 +46,9 @@ export {
   getUrlFromDirectPath,
   downloadContentFromMessage,
   downloadEncryptedContent,
+  generateThumbnail,
+  getAudioDuration,
+  extensionForMediaMessage,
   type ProgressCallback,
   type MediaDownloadOptions,
   type MediaUploadOptions,
@@ -47,4 +56,8 @@ export {
   type EncryptedStreamResult,
   type MediaUploadResult,
 } from './media.js';
+export {
+  MessageRetryManager,
+  type RetryStatistics,
+} from './retry-manager.js';
 export type * from './types.js';

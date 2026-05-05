@@ -7,7 +7,12 @@
  * getContentType, generateForwardMessageContent).
  */
 import { proto } from '../proto/index.js';
-import type { AnyMessageContent, WAMessage, WAMessageContent } from '../types/message.js';
+import type {
+  AnyMessageContent,
+  MediaUploadCallback,
+  WAMessage,
+  WAMessageContent,
+} from '../types/message.js';
 import { generateMessageId } from '../utils/crypto.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -128,6 +133,8 @@ export interface GenerateContentOptions {
   font?: number;
   /** Group JID for ephemeral/message context. */
   jid?: string;
+  /** Media upload callback — encrypts + uploads to WhatsApp CDN. */
+  upload?: MediaUploadCallback;
 }
 
 /**
@@ -201,43 +208,248 @@ export async function generateWAMessageContent(
       },
     };
   } else if ('image' in message) {
-    // Defer full media prep to relay — store raw upload data.
-    const mediaMsg: Record<string, unknown> = {};
-    if (message.caption) mediaMsg.caption = message.caption;
-    if (message.jpegThumbnail) mediaMsg.jpegThumbnail = message.jpegThumbnail;
-    if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
-    (m as { imageMessage?: unknown }).imageMessage = mediaMsg;
+    if (options.upload) {
+      const uploaded = await options.upload(message.image, 'image', { generateThumbnail: true });
+      const mediaMsg: Record<string, unknown> = {
+        url: uploaded.mediaUrl,
+        directPath: uploaded.directPath,
+        mediaKey: uploaded.mediaKey,
+        fileEncSha256: uploaded.fileEncSha256,
+        fileSha256: uploaded.fileSha256,
+        fileLength: uploaded.fileLength,
+        mimetype: 'image/jpeg',
+      };
+      if (uploaded.originalDimensions) {
+        mediaMsg.width = uploaded.originalDimensions.width;
+        mediaMsg.height = uploaded.originalDimensions.height;
+      }
+      if (uploaded.jpegThumbnail) mediaMsg.jpegThumbnail = uploaded.jpegThumbnail;
+      if (message.caption) mediaMsg.caption = message.caption;
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { imageMessage?: unknown }).imageMessage = mediaMsg;
+    } else {
+      const mediaMsg: Record<string, unknown> = {};
+      if (message.caption) mediaMsg.caption = message.caption;
+      if (message.jpegThumbnail) mediaMsg.jpegThumbnail = message.jpegThumbnail;
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { imageMessage?: unknown }).imageMessage = mediaMsg;
+    }
   } else if ('video' in message) {
-    const mediaMsg: Record<string, unknown> = {};
-    if (message.caption) mediaMsg.caption = message.caption;
-    if (message.ptv) mediaMsg.ptv = true;
-    if (message.gifPlayback) mediaMsg.gifPlayback = true;
-    if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
-    (m as { videoMessage?: unknown }).videoMessage = mediaMsg;
+    if (options.upload) {
+      const uploaded = await options.upload(message.video, 'video', { generateThumbnail: true });
+      const mediaMsg: Record<string, unknown> = {
+        url: uploaded.mediaUrl,
+        directPath: uploaded.directPath,
+        mediaKey: uploaded.mediaKey,
+        fileEncSha256: uploaded.fileEncSha256,
+        fileSha256: uploaded.fileSha256,
+        fileLength: uploaded.fileLength,
+        mimetype: message.gifPlayback ? 'video/mp4' : 'video/mp4',
+      };
+      if (uploaded.originalDimensions) {
+        mediaMsg.width = uploaded.originalDimensions.width;
+        mediaMsg.height = uploaded.originalDimensions.height;
+      }
+      if (uploaded.jpegThumbnail) mediaMsg.jpegThumbnail = uploaded.jpegThumbnail;
+      if (message.caption) mediaMsg.caption = message.caption;
+      if (message.ptv) mediaMsg.ptv = true;
+      if (message.gifPlayback) mediaMsg.gifPlayback = true;
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { videoMessage?: unknown }).videoMessage = mediaMsg;
+    } else {
+      const mediaMsg: Record<string, unknown> = {};
+      if (message.caption) mediaMsg.caption = message.caption;
+      if (message.ptv) mediaMsg.ptv = true;
+      if (message.gifPlayback) mediaMsg.gifPlayback = true;
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { videoMessage?: unknown }).videoMessage = mediaMsg;
+    }
   } else if ('audio' in message) {
-    const mediaMsg: Record<string, unknown> = {};
-    if (message.ptt) mediaMsg.ptt = true;
-    if (message.seconds !== undefined) mediaMsg.seconds = message.seconds;
-    if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
-    (m as { audioMessage?: unknown }).audioMessage = mediaMsg;
+    if (options.upload) {
+      const uploaded = await options.upload(message.audio, 'audio');
+      const mediaMsg: Record<string, unknown> = {
+        url: uploaded.mediaUrl,
+        directPath: uploaded.directPath,
+        mediaKey: uploaded.mediaKey,
+        fileEncSha256: uploaded.fileEncSha256,
+        fileSha256: uploaded.fileSha256,
+        fileLength: uploaded.fileLength,
+        mimetype: 'audio/ogg; codecs=opus',
+      };
+      if (message.ptt) mediaMsg.ptt = true;
+      if (message.seconds !== undefined) mediaMsg.seconds = message.seconds;
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { audioMessage?: unknown }).audioMessage = mediaMsg;
+    } else {
+      const mediaMsg: Record<string, unknown> = {};
+      if (message.ptt) mediaMsg.ptt = true;
+      if (message.seconds !== undefined) mediaMsg.seconds = message.seconds;
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { audioMessage?: unknown }).audioMessage = mediaMsg;
+    }
   } else if ('document' in message) {
-    const mediaMsg: Record<string, unknown> = {
-      mimetype: message.mimetype,
-    };
-    if (message.fileName) mediaMsg.fileName = message.fileName;
-    if (message.caption) mediaMsg.caption = message.caption;
-    if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
-    (m as { documentMessage?: unknown }).documentMessage = mediaMsg;
+    if (options.upload) {
+      const uploaded = await options.upload(message.document, 'document');
+      const mediaMsg: Record<string, unknown> = {
+        url: uploaded.mediaUrl,
+        directPath: uploaded.directPath,
+        mediaKey: uploaded.mediaKey,
+        fileEncSha256: uploaded.fileEncSha256,
+        fileSha256: uploaded.fileSha256,
+        fileLength: uploaded.fileLength,
+        mimetype: message.mimetype,
+      };
+      if (message.fileName) mediaMsg.fileName = message.fileName;
+      if (message.caption) mediaMsg.caption = message.caption;
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { documentMessage?: unknown }).documentMessage = mediaMsg;
+    } else {
+      const mediaMsg: Record<string, unknown> = {
+        mimetype: message.mimetype,
+      };
+      if (message.fileName) mediaMsg.fileName = message.fileName;
+      if (message.caption) mediaMsg.caption = message.caption;
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { documentMessage?: unknown }).documentMessage = mediaMsg;
+    }
   } else if ('sticker' in message) {
-    const mediaMsg: Record<string, unknown> = {};
-    if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
-    (m as { stickerMessage?: unknown }).stickerMessage = mediaMsg;
+    if (options.upload) {
+      const uploaded = await options.upload(message.sticker, 'sticker');
+      const mediaMsg: Record<string, unknown> = {
+        url: uploaded.mediaUrl,
+        directPath: uploaded.directPath,
+        mediaKey: uploaded.mediaKey,
+        fileEncSha256: uploaded.fileEncSha256,
+        fileSha256: uploaded.fileSha256,
+        fileLength: uploaded.fileLength,
+        mimetype: message.isAnimated ? 'image/webp' : 'image/webp',
+      };
+      if (uploaded.originalDimensions) {
+        mediaMsg.width = uploaded.originalDimensions.width;
+        mediaMsg.height = uploaded.originalDimensions.height;
+      }
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { stickerMessage?: unknown }).stickerMessage = mediaMsg;
+    } else {
+      const mediaMsg: Record<string, unknown> = {};
+      if (message.contextInfo) mediaMsg.contextInfo = message.contextInfo;
+      (m as { stickerMessage?: unknown }).stickerMessage = mediaMsg;
+    }
   } else if ('poll' in message) {
     m.pollCreationMessage = {
       name: message.poll.name,
       options: message.poll.values.map((v) => ({ optionName: v })),
       selectableOptionsCount: message.poll.selectableCount ?? 0,
     };
+  } else if ('buttons' in message) {
+    const b = message.buttons;
+    const btnMsg: Record<string, unknown> = {};
+    if (b.text) btnMsg.contentText = b.text;
+    if (b.footerText) btnMsg.footerText = b.footerText;
+    if (b.headerText) btnMsg.headerType = 2;
+    if (b.headerText) btnMsg.text = b.headerText;
+    if (b.headerType !== undefined) btnMsg.headerType = b.headerType;
+    btnMsg.buttons = b.buttons.map((btn, i) => ({
+      buttonId: btn.buttonId ?? `${i}`,
+      buttonText: { displayText: btn.buttonText.displayText },
+      type: btn.type ?? 1,
+      nativeFlowInfo: btn.nativeFlowInfo ?? null,
+    }));
+    if (b.contextInfo) btnMsg.contextInfo = b.contextInfo;
+
+    // Handle media headers (image/video/document)
+    if (b.headerImage && options.upload) {
+      const uploaded = await options.upload(b.headerImage, 'image', { generateThumbnail: true });
+      btnMsg.headerType = 3;
+      btnMsg.imageMessage = {
+        url: uploaded.mediaUrl,
+        mediaKey: uploaded.mediaKey,
+        fileEncSha256: uploaded.fileEncSha256,
+        fileSha256: uploaded.fileSha256,
+        fileLength: uploaded.fileLength,
+        mimetype: 'image/jpeg',
+        ...(uploaded.originalDimensions ?? {}),
+        jpegThumbnail: uploaded.jpegThumbnail,
+      };
+    } else if (b.headerVideo && options.upload) {
+      const uploaded = await options.upload(b.headerVideo, 'video', { generateThumbnail: true });
+      btnMsg.headerType = 4;
+      btnMsg.videoMessage = {
+        url: uploaded.mediaUrl,
+        mediaKey: uploaded.mediaKey,
+        fileEncSha256: uploaded.fileEncSha256,
+        fileSha256: uploaded.fileSha256,
+        fileLength: uploaded.fileLength,
+        mimetype: 'video/mp4',
+        ...(uploaded.originalDimensions ?? {}),
+        jpegThumbnail: uploaded.jpegThumbnail,
+      };
+    } else if (b.headerDocument && options.upload) {
+      const uploaded = await options.upload(b.headerDocument, 'document');
+      btnMsg.headerType = 5;
+      btnMsg.documentMessage = {
+        url: uploaded.mediaUrl,
+        mediaKey: uploaded.mediaKey,
+        fileEncSha256: uploaded.fileEncSha256,
+        fileSha256: uploaded.fileSha256,
+        fileLength: uploaded.fileLength,
+        mimetype: 'application/pdf',
+      };
+    }
+    m.buttonsMessage = btnMsg;
+  } else if ('list' in message) {
+    const l = message.list;
+    const listMsg: Record<string, unknown> = {};
+    if (l.title) listMsg.title = l.title;
+    if (l.description) listMsg.description = l.description;
+    if (l.buttonText) listMsg.buttonText = l.buttonText;
+    if (l.footerText) listMsg.footerText = l.footerText;
+    if (l.listType !== undefined) listMsg.listType = l.listType;
+    listMsg.sections = l.sections.map((s) => ({
+      title: s.title,
+      rows: s.rows.map((r) => ({
+        title: r.title,
+        description: r.description ?? null,
+        rowId: r.rowId,
+      })),
+    }));
+    if (l.contextInfo) listMsg.contextInfo = l.contextInfo;
+    m.listMessage = listMsg;
+  } else if ('buttonReply' in message) {
+    const br = message.buttonReply;
+    if (message.type === 'template') {
+      m.templateButtonReplyMessage = {
+        selectedDisplayText: br.displayText,
+        selectedId: br.id,
+        selectedIndex: br.index,
+      };
+    } else {
+      m.buttonsResponseMessage = {
+        selectedButtonId: br.id,
+        selectedDisplayText: br.displayText,
+        type: 2, // DISPLAY_TEXT
+      };
+    }
+  } else if ('interactive' in message) {
+    const iv = message.interactive;
+    const imsg: Record<string, unknown> = {};
+    if (iv.body) imsg.body = iv.body;
+    if (iv.footer) imsg.footer = iv.footer;
+    if (iv.header) imsg.header = iv.header;
+    if (iv.nativeFlowMessage) imsg.nativeFlowMessage = iv.nativeFlowMessage;
+    if (iv.carouselMessage) imsg.carouselMessage = iv.carouselMessage;
+    if (iv.shopMessage) imsg.shopMessage = iv.shopMessage;
+    if (iv.productMessage) imsg.productMessage = iv.productMessage;
+    if (iv.contextInfo) imsg.contextInfo = iv.contextInfo;
+    m.interactiveMessage = imsg;
+  } else if ('template' in message) {
+    const t = message.template;
+    const tpl: Record<string, unknown> = {};
+    if (t.hydratedFourRowTemplate) tpl.hydratedFourRowTemplate = t.hydratedFourRowTemplate;
+    if (t.hydratedTemplate) tpl.hydratedTemplate = t.hydratedTemplate;
+    if (t.fourRowTemplate) tpl.fourRowTemplate = t.fourRowTemplate;
+    if (t.contextInfo) tpl.contextInfo = t.contextInfo;
+    m.templateMessage = tpl;
   }
 
   // ── View-once wrapping ────────────────────────────────────────

@@ -4,6 +4,12 @@ import type { BinaryNode } from './binary/index.js';
 import { isJidGroup, jidNormalizedUser } from './binary/jid.js';
 import { connectOnce } from './client/connect.js';
 import { type GroupOperations, makeGroupOperations } from './groups/index.js';
+import {
+  type MediaConnInfo,
+  encryptedStream,
+  getWAUploadToServer,
+  refreshMediaConn,
+} from './messages/media.js';
 import { extractText, isGroupMessage } from './messages/receive.js';
 import { cleanMessage, decryptMessageNode, isRealMessage } from './messages/recv.js';
 import { makeMessageRelay } from './messages/send-relay.js';
@@ -24,7 +30,7 @@ import { ConnectionStateMachine } from './socket/state-machine.js';
 import type { AuthStore } from './store/interface.js';
 import type { AuthenticationCreds, AuthenticationState } from './types/auth.js';
 import type { NexaWhatsEventMap } from './types/events.js';
-import type { WAMessage, WAMessageUpdate } from './types/message.js';
+import type { MediaUploadCallback, WAMessage, WAMessageUpdate } from './types/message.js';
 import type { AnyMessageContent, MessagePriority } from './types/message.js';
 import type { ClientConfig, ConnectionState } from './types/socket.js';
 import { initAuthCreds } from './utils/auth.js';
@@ -360,6 +366,56 @@ export class NexaWhatsClient extends EventEmitter {
           });
         };
 
+        // ── Media upload callback ────────────────────────────
+        const mediaConnCache: { current?: MediaConnInfo } = {};
+        const mediaLogger = logger.child({ class: 'media' });
+        let waUploadToServer: MediaUploadCallback | undefined;
+
+        if (query) {
+          waUploadToServer = async (media, mediaType, _opts) => {
+            const { mediaKey, encFilePath, fileEncSha256, fileSha256, fileLength } =
+              await encryptedStream(media, mediaType, { logger: mediaLogger });
+
+            const uploadFn = getWAUploadToServer({
+              refreshMediaConn: (force) =>
+                refreshMediaConn(
+                  query as (node: unknown) => Promise<{
+                    tag: string;
+                    attrs: Record<string, string>;
+                    content?: unknown[];
+                  }>,
+                  mediaConnCache,
+                  mediaLogger,
+                  force,
+                ),
+              logger: mediaLogger,
+            });
+
+            const fileEncSha256B64 = fileEncSha256.toString('base64');
+            const uploadResult = await uploadFn(encFilePath, {
+              mediaType,
+              fileEncSha256B64,
+            });
+
+            // Clean up temp encrypted file
+            const { promises: fs } = await import('node:fs');
+            try {
+              await fs.unlink(encFilePath);
+            } catch {
+              // best-effort cleanup
+            }
+
+            const result: Awaited<ReturnType<MediaUploadCallback>> = {
+              ...uploadResult,
+              mediaKey,
+              fileEncSha256,
+              fileSha256,
+              fileLength,
+            };
+            return result;
+          };
+        }
+
         // ── Message relay ────────────────────────────────────
         const authState: AuthenticationState = {
           creds,
@@ -371,6 +427,7 @@ export class NexaWhatsClient extends EventEmitter {
           auth: authState,
           logger: logger.child({ class: 'relay' }),
           query,
+          waUploadToServer,
         });
 
         // Wire into sender + queue
@@ -579,6 +636,46 @@ export class NexaWhatsClient extends EventEmitter {
           };
           this.emit('messages.update', [update]);
         }
+      }
+
+      // ── History sync notification (Phase 4) ────────────────────
+      const meta = message as unknown as Record<string, unknown>;
+      if (meta.historySyncData) {
+        try {
+          this.emit('messaging-history.set', {
+            ...(meta.historySyncData as Record<string, unknown>),
+            isLatest: true,
+          });
+        } catch (err) {
+          logger.error({ err }, 'failed to emit history sync data');
+        }
+        meta.historySyncData = undefined;
+      }
+
+      // ── App state sync key share (Phase 4) ─────────────────────
+      if (meta.appStateSyncKeys) {
+        const syncKeys = meta.appStateSyncKeys as Array<{
+          keyId?: string;
+          keyData?: Uint8Array;
+        }>;
+        try {
+          const keys = this.config.auth.keys;
+          const newKeys: string[] = [];
+          const keyData: Record<string, Uint8Array> = {};
+          for (const { keyId, keyData: kd } of syncKeys) {
+            if (keyId && kd) {
+              keyData[keyId] = kd;
+              newKeys.push(keyId);
+            }
+          }
+          if (newKeys.length) {
+            await keys.set({ 'app-state-sync-key': keyData });
+            logger.info({ newKeys }, 'stored app state sync keys');
+          }
+        } catch (err) {
+          logger.error({ err }, 'failed to store app state sync keys');
+        }
+        meta.appStateSyncKeys = undefined;
       }
 
       // Run middleware pipeline for real messages

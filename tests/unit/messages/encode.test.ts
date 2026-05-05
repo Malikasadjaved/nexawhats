@@ -186,6 +186,155 @@ describe('generateWAMessageContent', () => {
       .extendedTextMessage;
     expect(ext?.contextInfo?.mentionedJid).toEqual(['someone@s.whatsapp.net']);
   });
+
+  // ── Phase 3: interactive message types ──────────────────────────
+
+  it('generates buttonsMessage for buttons content', async () => {
+    const content: AnyMessageContent = {
+      buttons: {
+        text: 'Choose one',
+        footerText: 'Footer',
+        buttons: [
+          { buttonId: 'btn1', buttonText: { displayText: 'Option A' }, type: 1 },
+          { buttonId: 'btn2', buttonText: { displayText: 'Option B' }, type: 1 },
+        ],
+        headerType: 2,
+        headerText: 'Header',
+      },
+    };
+    const result = (await generateWAMessageContent(content, opts)) as Record<string, unknown>;
+    const bm = result.buttonsMessage as Record<string, unknown> | undefined;
+    expect(bm).toBeDefined();
+    expect(bm?.contentText).toBe('Choose one');
+    expect(bm?.footerText).toBe('Footer');
+    expect(bm?.headerType).toBe(2);
+    expect(bm?.text).toBe('Header');
+    expect(Array.isArray(bm?.buttons)).toBe(true);
+    expect((bm?.buttons as Array<unknown>)?.length).toBe(2);
+  });
+
+  it('generates buttonsMessage with default headerType from headerText', async () => {
+    const content: AnyMessageContent = {
+      buttons: {
+        text: 'Body',
+        buttons: [{ buttonId: 'a', buttonText: { displayText: 'Click' }, type: 1 }],
+        headerText: 'Title',
+      },
+    };
+    const result = (await generateWAMessageContent(content, opts)) as Record<string, unknown>;
+    const bm = result.buttonsMessage as Record<string, unknown> | undefined;
+    expect(bm?.headerType).toBe(2);
+    expect(bm?.text).toBe('Title');
+  });
+
+  it('generates listMessage for list content', async () => {
+    const content: AnyMessageContent = {
+      list: {
+        title: 'Pick one',
+        description: 'Choose from the list',
+        buttonText: 'View options',
+        footerText: 'Thanks',
+        listType: 0,
+        sections: [
+          {
+            title: 'Section 1',
+            rows: [
+              { title: 'Row 1', description: 'First', rowId: 'r1' },
+              { title: 'Row 2', rowId: 'r2' },
+            ],
+          },
+        ],
+      },
+    };
+    const result = (await generateWAMessageContent(content, opts)) as Record<string, unknown>;
+    const lm = result.listMessage as Record<string, unknown> | undefined;
+    expect(lm).toBeDefined();
+    expect(lm?.title).toBe('Pick one');
+    expect(lm?.buttonText).toBe('View options');
+    expect(lm?.listType).toBe(0);
+    const sections = lm?.sections as Array<{ title?: string; rows: Array<unknown> }> | undefined;
+    expect(sections?.length).toBe(1);
+    expect(sections?.[0]?.rows?.length).toBe(2);
+  });
+
+  it('generates templateButtonReplyMessage for buttonReply (template type)', async () => {
+    const content: AnyMessageContent = {
+      buttonReply: { displayText: 'Yes', id: 'btn-yes', index: 0 },
+      type: 'template',
+    };
+    const result = (await generateWAMessageContent(content, opts)) as Record<string, unknown>;
+    const reply = result.templateButtonReplyMessage as
+      | { selectedDisplayText?: string; selectedId?: string; selectedIndex?: number }
+      | undefined;
+    expect(reply).toBeDefined();
+    expect(reply?.selectedDisplayText).toBe('Yes');
+    expect(reply?.selectedId).toBe('btn-yes');
+    expect(reply?.selectedIndex).toBe(0);
+  });
+
+  it('generates buttonsResponseMessage for buttonReply (plain type)', async () => {
+    const content: AnyMessageContent = {
+      buttonReply: { displayText: 'OK', id: 'ok-btn' },
+      type: 'plain',
+    };
+    const result = (await generateWAMessageContent(content, opts)) as Record<string, unknown>;
+    const resp = result.buttonsResponseMessage as
+      | { selectedButtonId?: string; selectedDisplayText?: string; type?: number }
+      | undefined;
+    expect(resp).toBeDefined();
+    expect(resp?.selectedButtonId).toBe('ok-btn');
+    expect(resp?.selectedDisplayText).toBe('OK');
+    expect(resp?.type).toBe(2); // DISPLAY_TEXT
+  });
+
+  it('generates interactiveMessage for interactive content', async () => {
+    const content: AnyMessageContent = {
+      interactive: {
+        body: { text: 'Body text' },
+        footer: { text: 'Footer text' },
+        header: { title: 'Header', hasMediaAttachment: false },
+        nativeFlowMessage: {
+          buttons: [{ name: 'cta_url', params: { url: 'https://example.com' } }],
+        },
+      },
+    };
+    const result = (await generateWAMessageContent(content, opts)) as Record<string, unknown>;
+    const iv = result.interactiveMessage as Record<string, unknown> | undefined;
+    expect(iv).toBeDefined();
+    expect((iv?.body as { text?: string })?.text).toBe('Body text');
+    expect((iv?.footer as { text?: string })?.text).toBe('Footer text');
+    expect(iv?.nativeFlowMessage).toBeDefined();
+  });
+
+  it('generates interactiveMessage with carouselMessage', async () => {
+    const content: AnyMessageContent = {
+      interactive: {
+        body: { text: 'Products' },
+        carouselMessage: { cards: [{ header: { title: 'Card 1' }, body: { text: 'Desc' } }] },
+      },
+    };
+    const result = (await generateWAMessageContent(content, opts)) as Record<string, unknown>;
+    const iv = result.interactiveMessage as Record<string, unknown> | undefined;
+    expect(iv?.carouselMessage).toBeDefined();
+  });
+
+  it('generates templateMessage for template content', async () => {
+    const content: AnyMessageContent = {
+      template: {
+        hydratedFourRowTemplate: {
+          hydratedContentText: 'Hello',
+          hydratedFooterText: 'Footer',
+          hydratedButtons: [{ index: 0, quickReplyButton: { displayText: 'Reply', id: 'r1' } }],
+        },
+        contextInfo: {},
+      },
+    };
+    const result = (await generateWAMessageContent(content, opts)) as Record<string, unknown>;
+    const tpl = result.templateMessage as Record<string, unknown> | undefined;
+    expect(tpl).toBeDefined();
+    expect(tpl?.hydratedFourRowTemplate).toBeDefined();
+    expect(tpl?.contextInfo).toBeDefined();
+  });
 });
 
 // ── generateWAMessageFromContent ────────────────────────────────────────

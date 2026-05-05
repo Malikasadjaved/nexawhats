@@ -507,3 +507,157 @@ export async function downloadEncryptedContent(
 
   return toReadable(plaintext);
 }
+
+// ── Thumbnail + audio + extension (Phase 8) ────────────────────────────
+
+/**
+ * Generate a JPEG thumbnail (base64) for an image or video media file.
+ * Dynamically loads `sharp` or `jimp` for image processing; video
+ * thumbnail requires `ffmpeg` on the system PATH.
+ */
+export async function generateThumbnail(
+  file: string,
+  mediaType: 'video' | 'image',
+  options?: { logger?: { debug?: (...args: unknown[]) => void } },
+): Promise<{
+  thumbnail: string | undefined;
+  originalImageDimensions?: { width: number; height: number };
+}> {
+  let thumbnail: string | undefined;
+  let originalImageDimensions: { width: number; height: number } | undefined;
+
+  if (mediaType === 'image') {
+    const img = await extractImageThumb(file);
+    thumbnail = img.buffer.toString('base64');
+    if (img.original.width && img.original.height) {
+      originalImageDimensions = {
+        width: img.original.width,
+        height: img.original.height,
+      };
+    }
+  } else if (mediaType === 'video') {
+    const imgFilename = join(tmpdir(), `thumb-${Date.now()}.jpg`);
+    try {
+      await extractVideoThumb(file, imgFilename);
+      const buff = await fs.readFile(imgFilename);
+      thumbnail = buff.toString('base64');
+      await fs.unlink(imgFilename);
+    } catch (err) {
+      options?.logger?.debug?.('could not generate video thumb: ' + String(err));
+    }
+  }
+
+  return { thumbnail, originalImageDimensions };
+}
+
+async function extractImageThumb(
+  bufferOrFilePath: Buffer | string,
+  width = 32,
+): Promise<{
+  buffer: Buffer;
+  original: { width: number | undefined; height: number | undefined };
+}> {
+  const lib = await getImageLibrary();
+
+  if ('sharp' in lib) {
+    const sharp = lib.sharp as (input: Buffer | string) => {
+      resize: (w: number) => { jpeg: (opts: { quality: number }) => { toBuffer: () => Promise<Buffer> } };
+      metadata: () => Promise<{ width?: number; height?: number }>;
+    };
+    const img = sharp(bufferOrFilePath);
+    const dimensions = await img.metadata();
+    const buffer = await img.resize(width).jpeg({ quality: 50 }).toBuffer();
+    return { buffer, original: { width: dimensions.width, height: dimensions.height } };
+  }
+
+  // jimp path
+  const jimpLib = lib.jimp as {
+    Jimp: {
+      read: (input: Buffer | string) => Promise<{
+        width: number;
+        height: number;
+        resize: (opts: { w: number }) => {
+          getBuffer: (mime: string, opts: { quality: number }) => Promise<Buffer>;
+        };
+      }>;
+    };
+  };
+  const jimp = await jimpLib.Jimp.read(bufferOrFilePath);
+  const dimensions = { width: jimp.width, height: jimp.height };
+  const buffer = await jimp.resize({ w: width }).getBuffer('image/jpeg', { quality: 50 });
+  return { buffer, original: { width: dimensions.width, height: dimensions.height } };
+}
+
+async function getImageLibrary(): Promise<
+  { sharp: unknown } | { jimp: unknown }
+> {
+  const [sharp, jimp] = await Promise.all([
+    // Optional dependencies — consumers install sharp or jimp on demand
+    (import('sharp') as Promise<unknown>).catch(() => undefined),
+    (import('jimp') as Promise<unknown>).catch(() => undefined),
+  ]);
+  if (sharp) return { sharp };
+  if (jimp) return { jimp };
+  throw new Error('No image processing library available — install `sharp` or `jimp`');
+}
+
+async function extractVideoThumb(
+  path: string,
+  destPath: string,
+  time = '00:00:00',
+  size = { width: 32, height: 32 },
+): Promise<void> {
+  const { exec } = await import('node:child_process');
+  return new Promise<void>((resolve, reject) => {
+    const cmd = `ffmpeg -ss ${time} -i "${path}" -y -vf scale=${size.width}:-1 -vframes 1 -f image2 "${destPath}"`;
+    exec(cmd, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+/**
+ * Get the duration (in seconds) of an audio buffer, file path, or stream.
+ * Dynamically imports `music-metadata`.
+ */
+export async function getAudioDuration(
+  buffer: Buffer | string,
+): Promise<number | undefined> {
+  const musicMetadata = await import('music-metadata');
+  const options = { duration: true };
+  let metadata: { format: { duration?: number } };
+
+  if (Buffer.isBuffer(buffer)) {
+    metadata = await musicMetadata.parseBuffer(buffer, undefined, options);
+  } else {
+    metadata = await musicMetadata.parseFile(buffer, options);
+  }
+
+  return metadata.format.duration;
+}
+
+/**
+ * Derive a file extension from a WhatsApp message content object.
+ * Returns the extension WITHOUT a leading dot (e.g. `jpeg`, `mp4`),
+ * or `.jpeg` for location / live-location / product messages.
+ */
+export function extensionForMediaMessage(
+  message: Record<string, unknown>,
+): string {
+  const getExt = (mimetype: string): string =>
+    mimetype.split(';')[0]?.split('/')[1] ?? '';
+
+  const type = Object.keys(message)[0] ?? '';
+
+  if (
+    type === 'locationMessage' ||
+    type === 'liveLocationMessage' ||
+    type === 'productMessage'
+  ) {
+    return '.jpeg';
+  }
+
+  const msgContent = message[type] as { mimetype?: string } | undefined;
+  return getExt(msgContent?.mimetype ?? '');
+}

@@ -80,7 +80,7 @@ export interface SignalDataTypeMap {
   session: Uint8Array;
   'sender-key': Uint8Array;
   'sender-key-memory': Record<string, boolean>;
-  'app-state-sync-key': Record<string, unknown>;
+  'app-state-sync-key': Uint8Array;
   'app-state-sync-version': Record<string, unknown>;
   'lid-mapping': string;
   'device-list': string[];

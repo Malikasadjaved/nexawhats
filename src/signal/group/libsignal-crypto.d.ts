@@ -47,6 +47,11 @@ declare module 'libsignal/src/crypto.js' {
   export function hash(data: Buffer): Buffer;
 }
 
+// Optional media-processing dependencies (Phase 8). Install sharp or
+// jimp for thumbnail generation; neither is required at runtime.
+declare module 'sharp';
+declare module 'jimp';
+
 declare module 'libsignal/src/curve.js' {
   export interface KeyPair {
     pubKey: Buffer;

@@ -106,6 +106,20 @@ export interface WAMessageContent {
     destinationJid?: string | null;
     message?: WAMessageContent | null;
   } | null;
+  /** Button messages. */
+  buttonsMessage?: Record<string, unknown> | null;
+  /** List picker messages. */
+  listMessage?: Record<string, unknown> | null;
+  /** List response messages. */
+  listResponseMessage?: Record<string, unknown> | null;
+  /** Button response messages. */
+  buttonsResponseMessage?: Record<string, unknown> | null;
+  /** Template button reply messages. */
+  templateButtonReplyMessage?: Record<string, unknown> | null;
+  /** Interactive v2 messages. */
+  interactiveMessage?: Record<string, unknown> | null;
+  /** Template messages. */
+  templateMessage?: Record<string, unknown> | null;
   /** Allow any other proto fields at runtime. */
   [key: string]: unknown;
 }
@@ -163,7 +177,12 @@ export type AnyMessageContent =
   | PollContent
   | EditContent
   | DeleteContent
-  | ForwardContent;
+  | ForwardContent
+  | ButtonsContent
+  | ListContent
+  | ButtonReplyContent
+  | InteractiveContent
+  | TemplateContent;
 
 export interface TextContent {
   text: string;
@@ -253,8 +272,128 @@ export interface ForwardContent {
   force?: boolean;
 }
 
+// ── Interactive message content types (Phase 3) ─────────────────────
+
+export interface ButtonsContent {
+  buttons: {
+    /** Body text shown above the buttons. */
+    text?: string;
+    /** Footer text shown below the buttons. */
+    footerText?: string;
+    /** The buttons to display (max 3). */
+    buttons: Array<{
+      buttonId: string;
+      buttonText: { displayText: string };
+      /** 1 = QUICK_REPLY, 2 = URL, 3 = CALL */
+      type: 1 | 2 | 3;
+      nativeFlowInfo?: Record<string, unknown>;
+    }>;
+    /** Header type: 1 = empty, 2 = text, 3 = image, 4 = video, 5 = document */
+    headerType?: number;
+    /** Header text (used when headerType = 2). */
+    headerText?: string;
+    /** Header image (used when headerType = 3). Requires `upload` callback. */
+    headerImage?: WAMediaUpload;
+    /** Header video (used when headerType = 4). Requires `upload` callback. */
+    headerVideo?: WAMediaUpload;
+    /** Header document (used when headerType = 5). Requires `upload` callback. */
+    headerDocument?: WAMediaUpload;
+    contextInfo?: MessageContextInfo;
+  };
+}
+
+export interface ListContent {
+  list: {
+    /** List title. */
+    title?: string;
+    /** Body/description text. */
+    description?: string;
+    /** Text on the "send" button. */
+    buttonText?: string;
+    /** Footer text. */
+    footerText?: string;
+    /** List sections, each containing rows. */
+    sections: Array<{
+      title?: string;
+      rows: Array<{
+        title: string;
+        description?: string;
+        rowId: string;
+      }>;
+    }>;
+    /** 0 = SINGLE_SELECT, 1 = PRODUCT_LIST */
+    listType?: number;
+    contextInfo?: MessageContextInfo;
+  };
+}
+
+export interface InteractiveContent {
+  interactive: {
+    /** Interactive body. */
+    body?: { text: string };
+    /** Interactive footer. */
+    footer?: { text: string };
+    /** Interactive header (optional). */
+    header?: {
+      title?: string;
+      subtitle?: string;
+      hasMediaAttachment?: boolean;
+    };
+    /** Native Flow Message (v2 interactive). */
+    nativeFlowMessage?: Record<string, unknown>;
+    /** Carousel message. */
+    carouselMessage?: Record<string, unknown>;
+    /** Shop message (commerce). */
+    shopMessage?: Record<string, unknown>;
+    /** Product message. */
+    productMessage?: Record<string, unknown>;
+    contextInfo?: MessageContextInfo;
+  };
+}
+
+export interface TemplateContent {
+  template: {
+    hydratedFourRowTemplate?: Record<string, unknown>;
+    hydratedTemplate?: Record<string, unknown>;
+    fourRowTemplate?: Record<string, unknown>;
+    contextInfo?: MessageContextInfo;
+  };
+}
+
+export interface ButtonReplyContent {
+  buttonReply: {
+    displayText: string;
+    id: string;
+    index?: number;
+  };
+  /** 'template' sends templateButtonReplyMessage, 'plain' sends buttonsResponseMessage */
+  type: 'template' | 'plain';
+}
+
 /** Media upload source — buffer, stream, or URL */
 export type WAMediaUpload = Buffer | { stream: NodeJS.ReadableStream } | { url: URL | string };
+
+/** Result from uploading media to WhatsApp's CDN. */
+export interface MediaUploadResult {
+  mediaUrl?: string;
+  directPath?: string;
+  fbid?: string;
+  ts?: string;
+  mediaKey: Buffer;
+  fileEncSha256: Buffer;
+  fileSha256: Buffer;
+  fileLength: number;
+  jpegThumbnail?: Buffer;
+  /** Height x Width of the original media. */
+  originalDimensions?: { width: number; height: number };
+}
+
+/** Callback that encrypts and uploads media, returning CDN handles. */
+export type MediaUploadCallback = (
+  media: WAMediaUpload,
+  mediaType: string,
+  opts?: { generateThumbnail?: boolean },
+) => Promise<MediaUploadResult>;
 
 /** Media types for upload/download */
 export type MediaType =

@@ -31,8 +31,9 @@ import {
 import { proto } from '../proto/index.js';
 import type { SignalRepository } from '../signal/libsignal.js';
 import type { AuthenticationCreds, AuthenticationState } from '../types/auth.js';
-import type { AnyMessageContent, WAMessage } from '../types/message.js';
+import type { AnyMessageContent, MediaUploadCallback, WAMessage } from '../types/message.js';
 import { generateWAMessage } from './encode.js';
+import type { MessageRetryManager } from './retry-manager.js';
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -118,6 +119,10 @@ export interface MessageRelayConfig {
   ) => Promise<
     Record<string, unknown> | Array<{ recipientJid: string; message: Record<string, unknown> }>
   >;
+  /** Media upload callback — encrypts + uploads to WhatsApp CDN. */
+  waUploadToServer?: MediaUploadCallback;
+  /** Retry manager for message retry handling. */
+  retryManager?: MessageRetryManager;
 }
 
 interface GroupMetadataMin {
@@ -169,9 +174,11 @@ function getMediaType(message: Record<string, unknown> | null | undefined): stri
   if (message.contactsArrayMessage) return 'contact_array';
   if (message.liveLocationMessage) return 'livelocation';
   if (message.stickerMessage) return 'sticker';
+  if (message.buttonsMessage) return 'buttons';
   if (message.listMessage) return 'list';
   if (message.listResponseMessage) return 'list_response';
   if (message.buttonsResponseMessage) return 'buttons_response';
+  if (message.templateButtonReplyMessage) return 'template_button_reply';
   if (message.orderMessage) return 'order';
   if (message.productMessage) return 'product';
   if (message.interactiveResponseMessage) return 'native_flow_response';
@@ -222,6 +229,8 @@ export function makeMessageRelay(config: MessageRelayConfig): MessageRelay {
     query,
     cachedGroupMetadata,
     patchMessageBeforeSending,
+    waUploadToServer,
+    retryManager,
   } = config;
   const creds = auth.creds;
   const keys = auth.keys;
@@ -708,6 +717,12 @@ export function makeMessageRelay(config: MessageRelayConfig): MessageRelay {
 
     // ── Retry resend ───────────────────────────────────────────────
     if (isRetryResend && participant) {
+      // Check retry limit
+      if (retryManager && !retryManager.canRetry(participant.jid, msgId)) {
+        logger.debug({ participant: participant.jid, msgId }, 'retry limit exceeded, dropping');
+        throw new Error(`Retry limit exceeded for ${participant.jid}/${msgId}`);
+      }
+
       const isParticipantLid = isLidUser(participant.jid);
       const isMe = areJidsSameUser(participant.jid, isParticipantLid ? (meLid ?? meId) : meId);
       const encodedMessageToSend = isMe
@@ -722,12 +737,13 @@ export function makeMessageRelay(config: MessageRelayConfig): MessageRelay {
         data: encodedMessageToSend,
         jid: participant.jid,
       });
+      retryManager?.incrementRetryCount(participant.jid, msgId);
       binaryNodeContent.push({
         tag: 'enc',
         attrs: {
           v: '2',
           type,
-          count: participant.count.toString(),
+          count: (participant.count ?? 0 + 1).toString(),
         },
         content: encryptedContent,
       });
@@ -865,6 +881,7 @@ export function makeMessageRelay(config: MessageRelayConfig): MessageRelay {
       backgroundColor: options.backgroundColor,
       font: options.font,
       jid,
+      upload: waUploadToServer,
     });
 
     const isDeleteMsg = 'delete' in content && !!(content as { delete?: unknown }).delete;

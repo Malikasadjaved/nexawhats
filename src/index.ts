@@ -93,6 +93,7 @@ export { messageLogger } from './middleware/builtin/logger.js';
 // Messages
 export {
   MessageSender,
+  MessageRetryManager,
   extractText,
   isFromMe,
   isGroupMessage,
@@ -102,6 +103,7 @@ export {
   hasMedia,
   getMediaType,
   resolveMediaUpload,
+  type RetryStatistics,
 } from './messages/index.js';
 
 // Binary
@@ -186,6 +188,7 @@ export {
 export { initAuthCreds } from './utils/auth.js';
 export { createLogger, defaultLogger, silentLogger } from './utils/logger.js';
 export { getPlatform, getDefaultDataDir } from './utils/platform.js';
+export { PreKeyManager, generatePreKeys } from './utils/pre-key-manager.js';
 
 // Groups
 export {
@@ -194,6 +197,17 @@ export {
   type GroupOperations,
   type GroupOperationsConfig,
 } from './groups/index.js';
+
+// Newsletter
+export {
+  makeNewsletterSocket,
+  type NewsletterSocket,
+  type NewsletterSocketConfig,
+  type NewsletterMetadata,
+  type NewsletterCreateResult,
+  type NewsletterUpdate,
+  type NewsletterViewRole,
+} from './newsletter/index.js';
 
 // Proto — dynamic WAProto bridge over optional `@whiskeysockets/baileys` dep.
 // `proto` is a runtime proxy; consumers wanting strict protobuf types

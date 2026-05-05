@@ -1,10 +1,13 @@
+import { promisify } from 'node:util';
 /**
  * Message receive — decodes, decrypts, and processes incoming WhatsApp
  * message stanzas from the wire.
  *
  * Ported from Baileys' `Socket/messages-recv.js` and
- * `Utils/decode-wa-message.js` + `Utils/process-message.js`.
+ * `Utils/decode-wa-message.js` + `Utils/process-message.js` +
+ * `Utils/history.js`.
  */
+import { inflate } from 'node:zlib';
 import type { Logger } from 'pino';
 import type { BinaryNode } from '../binary/index.js';
 import {
@@ -25,6 +28,10 @@ import { proto } from '../proto/index.js';
 import type { SignalRepository } from '../signal/libsignal.js';
 import type { WAMessage, WAMessageContent } from '../types/message.js';
 import { getContentType, normalizeMessageContent } from './encode.js';
+import { downloadContentFromMessage } from './media.js';
+import { aesDecryptGCM, hmacSign } from '../utils/crypto.js';
+
+const inflatePromise = promisify(inflate);
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -366,6 +373,77 @@ export function decryptMessageNode(
         fullMessage.messageStubType = 3; // CIPHERTEXT
         fullMessage.messageStubParameters = [NO_MESSAGE_FOUND_ERROR_TEXT];
       }
+
+      // ── Protocol message detection (Phase 4) ─────────────────────
+      const normalizedContent =
+        normalizeMessageContent(
+          fullMessage.message as Record<string, unknown> | null | undefined,
+        ) ?? {};
+      const protocolMsg = (normalizedContent as Record<string, unknown>).protocolMessage as
+        | {
+            type?: number | null;
+            historySyncNotification?: Record<string, unknown> | null;
+            appStateSyncKeyShare?: {
+              keys?: Array<{ keyData?: Uint8Array; keyId?: { keyId?: Uint8Array } }>;
+            } | null;
+          }
+        | undefined;
+
+      if (protocolMsg) {
+        // HISTORY_SYNC_NOTIFICATION = 10
+        if (protocolMsg.type === 10 && protocolMsg.historySyncNotification) {
+          try {
+            logger.debug('detected history sync notification, downloading...');
+            const historyData = await downloadAndProcessHistorySyncNotification(
+              protocolMsg.historySyncNotification,
+              {
+                downloadViaContent: async (msg, type) => {
+                  const dlMsg = {
+                    mediaKey: (msg.mediaKey as Uint8Array) ?? null,
+                    directPath: (msg.directPath as string) ?? null,
+                    url: (msg.url as string) ?? null,
+                  };
+                  return downloadContentFromMessage(dlMsg, type);
+                },
+              },
+            );
+            (fullMessage as unknown as Record<string, unknown>).historySyncData = historyData;
+          } catch (err) {
+            logger.error({ err, key: fullMessage.key }, 'failed to download history sync');
+          }
+        }
+
+        // APP_STATE_SYNC_KEY_SHARE = 11
+        if (protocolMsg.type === 11 && protocolMsg.appStateSyncKeyShare?.keys?.length) {
+          logger.debug(
+            { keyCount: protocolMsg.appStateSyncKeyShare.keys.length },
+            'detected app state sync key share',
+          );
+          (fullMessage as unknown as Record<string, unknown>).appStateSyncKeys =
+            protocolMsg.appStateSyncKeyShare.keys.map((k) => ({
+              keyId: k.keyId?.keyId ? Buffer.from(k.keyId.keyId).toString('base64') : undefined,
+              keyData: k.keyData,
+            }));
+        }
+      }
+
+      // ── Poll vote / event response detection (Phase 7) ──────────
+      // Attach encrypted payloads so consumers can decrypt them
+      // with the exported decryptPollVote / decryptEventResponse.
+
+      const encPollVote = extractEncryptedPollVote(
+        normalizedContent as Record<string, unknown> | null,
+      );
+      if (encPollVote) {
+        (fullMessage as unknown as Record<string, unknown>).encryptedPollVote = encPollVote;
+      }
+
+      const encEventResp = extractEncryptedEventResponse(
+        normalizedContent as Record<string, unknown> | null,
+      );
+      if (encEventResp) {
+        (fullMessage as unknown as Record<string, unknown>).encryptedEventResponse = encEventResp;
+      }
     },
   };
 }
@@ -495,4 +573,243 @@ async function getDecryptionJid(sender: string, repository: SignalRepository): P
   }
   const mapped = await repository.lidMapping.getLIDForPN(sender);
   return mapped || sender;
+}
+
+// ── History sync + app state sync (Phase 4) ──────────────────────────
+
+/**
+ * Extract a history sync notification from a decoded message, if present.
+ * Returns undefined for non-history-sync messages.
+ */
+export function getHistoryMsg(
+  message: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | undefined {
+  const normalized = normalizeMessageContent(message);
+  const histSyncMsg = (normalized as Record<string, unknown> | undefined)?.protocolMessage as
+    | { historySyncNotification?: Record<string, unknown> }
+    | undefined;
+  return histSyncMsg?.historySyncNotification;
+}
+
+/**
+ * Download, decompress, and decode a HistorySync protobuf from a
+ * received history sync notification.
+ */
+export async function downloadAndProcessHistorySyncNotification(
+  notification: Record<string, unknown>,
+  options: {
+    downloadMedia?: (msg: Record<string, unknown>, type: string) => Promise<AsyncIterable<Buffer>>;
+    downloadViaContent?: (
+      msg: Record<string, unknown>,
+      type: string,
+    ) => Promise<AsyncIterable<Buffer>>;
+  } = {},
+): Promise<Record<string, unknown>> {
+  let historyMsg: Record<string, unknown>;
+
+  // Inline payload path (initial bootstrap)
+  if (notification.initialHistBootstrapInlinePayload) {
+    const decompressed = await inflatePromise(
+      Buffer.from(notification.initialHistBootstrapInlinePayload as Uint8Array),
+    );
+    historyMsg = (
+      proto as Record<string, { decode: (b: Uint8Array) => Record<string, unknown> }>
+    ).HistorySync.decode(decompressed);
+  } else {
+    // Download the history from media servers
+    const downloader = options.downloadViaContent ?? options.downloadMedia;
+    if (!downloader) {
+      throw new Error('No download callback provided for history sync');
+    }
+    const stream = await downloader(notification, 'md-msg-hist');
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+    let buffer = Buffer.concat(chunks);
+    buffer = await inflatePromise(buffer);
+    historyMsg = (
+      proto as Record<string, { decode: (b: Uint8Array) => Record<string, unknown> }>
+    ).HistorySync.decode(buffer);
+  }
+
+  return historyMsg;
+}
+
+/**
+ * Process a raw HistorySync protobuf into messages, contacts, and chats.
+ */
+export function processHistoryMessage(item: Record<string, unknown>): {
+  chats: Record<string, unknown>[];
+  contacts: Record<string, unknown>[];
+  messages: Record<string, unknown>[];
+  syncType: unknown;
+  progress: unknown;
+} {
+  const messages: Record<string, unknown>[] = [];
+  const contacts: Record<string, unknown>[] = [];
+  const chats: Record<string, unknown>[] = [];
+
+  const syncType = item.syncType as number;
+  // HistorySyncType enum values from proto
+  const HIST_INITIAL_BOOTSTRAP = 0;
+  const HIST_RECENT = 1;
+  const HIST_FULL = 2;
+  const HIST_ON_DEMAND = 3;
+  const HIST_PUSH_NAME = 4;
+
+  if (
+    syncType === HIST_INITIAL_BOOTSTRAP ||
+    syncType === HIST_RECENT ||
+    syncType === HIST_FULL ||
+    syncType === HIST_ON_DEMAND
+  ) {
+    const conversations = (item.conversations as Array<Record<string, unknown>>) ?? [];
+    for (const chat of conversations) {
+      contacts.push({
+        id: chat.id,
+        name: chat.name || undefined,
+        lid: chat.lidJid || undefined,
+        phoneNumber: chat.pnJid || undefined,
+      });
+      const msgs = (chat.messages as Array<Record<string, unknown>> | undefined) ?? [];
+      (chat as { messages?: unknown }).messages = undefined;
+      for (const entry of msgs) {
+        const message = entry.message as Record<string, unknown> | undefined;
+        if (message) {
+          messages.push(message);
+        }
+        if (
+          message &&
+          !(message.key as { fromMe?: boolean })?.fromMe &&
+          message.messageTimestamp !== undefined &&
+          !chat.lastMessageRecvTimestamp
+        ) {
+          chat.lastMessageRecvTimestamp = message.messageTimestamp;
+        }
+      }
+      chats.push({ ...chat });
+    }
+  } else if (syncType === HIST_PUSH_NAME) {
+    const pushnames = (item.pushnames as Array<Record<string, unknown>>) ?? [];
+    for (const c of pushnames) {
+      contacts.push({ id: c.id, notify: c.pushname });
+    }
+  }
+
+  return {
+    chats,
+    contacts,
+    messages,
+    syncType: item.syncType,
+    progress: item.progress,
+  };
+}
+
+// ── Poll vote / event response decryption (Phase 7) ───────────────────
+
+export interface PollVoteContext {
+  pollCreatorJid: string;
+  pollMsgId: string;
+  pollEncKey: Uint8Array;
+  voterJid: string;
+}
+
+export interface EventResponseContext {
+  eventCreatorJid: string;
+  eventMsgId: string;
+  eventEncKey: Uint8Array;
+  responderJid: string;
+}
+
+/**
+ * Decrypt an encrypted poll vote.
+ *
+ * Uses HMAC-SHA256 key derivation (matching WhatsApp's
+ * `messageSecret`-based scheme) followed by AES-256-GCM decryption.
+ */
+export function decryptPollVote(
+  { encPayload, encIv }: { encPayload: Uint8Array; encIv: Uint8Array },
+  { pollCreatorJid, pollMsgId, pollEncKey, voterJid }: PollVoteContext,
+): Record<string, unknown> {
+  const toBinary = (txt: string): Buffer => Buffer.from(txt);
+
+  const sign = Buffer.concat([
+    toBinary(pollMsgId),
+    toBinary(pollCreatorJid),
+    toBinary(voterJid),
+    toBinary('Poll Vote'),
+    new Uint8Array([1]),
+  ]);
+
+  const key0 = hmacSign(new Uint8Array(32), pollEncKey, 'sha256');
+  const decKey = hmacSign(sign, key0, 'sha256');
+  const aad = toBinary(`${pollMsgId} ${voterJid}`);
+
+  const decrypted = aesDecryptGCM(encPayload, decKey, encIv, aad);
+  const Proto = proto as Record<string, Record<string, { decode(b: Uint8Array): Record<string, unknown> }>>;
+  return Proto.Message.PollVoteMessage.decode(decrypted);
+}
+
+/**
+ * Decrypt an encrypted event response.
+ *
+ * Same algorithm as `decryptPollVote` but uses "Event Response" as
+ * the domain separator in the HMAC key derivation.
+ */
+export function decryptEventResponse(
+  { encPayload, encIv }: { encPayload: Uint8Array; encIv: Uint8Array },
+  { eventCreatorJid, eventMsgId, eventEncKey, responderJid }: EventResponseContext,
+): Record<string, unknown> {
+  const toBinary = (txt: string): Buffer => Buffer.from(txt);
+
+  const sign = Buffer.concat([
+    toBinary(eventMsgId),
+    toBinary(eventCreatorJid),
+    toBinary(responderJid),
+    toBinary('Event Response'),
+    new Uint8Array([1]),
+  ]);
+
+  const key0 = hmacSign(new Uint8Array(32), eventEncKey, 'sha256');
+  const decKey = hmacSign(sign, key0, 'sha256');
+  const aad = toBinary(`${eventMsgId} ${responderJid}`);
+
+  const decrypted = aesDecryptGCM(encPayload, decKey, encIv, aad);
+  const Proto = proto as Record<string, Record<string, { decode(b: Uint8Array): Record<string, unknown> }>>;
+  return Proto.Message.EventResponseMessage.decode(decrypted);
+}
+
+/**
+ * Extract an encrypted poll vote from a decrypted message, if present.
+ * Returns undefined for non-poll-update messages or unencrypted votes.
+ */
+export function extractEncryptedPollVote(
+  content: Record<string, unknown> | null | undefined,
+): { encPayload: Uint8Array; encIv: Uint8Array } | undefined {
+  const pollUpdate = (content as Record<string, unknown> | undefined)?.pollUpdateMessage as Record<string, unknown> | undefined;
+  const vote = pollUpdate?.vote as { encPayload?: Uint8Array; encIv?: Uint8Array } | undefined;
+  if (vote?.encPayload && vote?.encIv) {
+    return { encPayload: vote.encPayload, encIv: vote.encIv };
+  }
+  return undefined;
+}
+
+/**
+ * Extract an encrypted event response from a decrypted message, if present.
+ */
+export function extractEncryptedEventResponse(
+  content: Record<string, unknown> | null | undefined,
+): { encPayload: Uint8Array; encIv: Uint8Array; eventCreationMessageKey?: Record<string, unknown> } | undefined {
+  const enc = (content as Record<string, unknown> | undefined)?.encEventResponseMessage as
+    | { encPayload?: Uint8Array; encIv?: Uint8Array; eventCreationMessageKey?: Record<string, unknown> }
+    | undefined;
+  if (enc?.encPayload && enc?.encIv) {
+    return {
+      encPayload: enc.encPayload,
+      encIv: enc.encIv,
+      eventCreationMessageKey: enc.eventCreationMessageKey,
+    };
+  }
+  return undefined;
 }
