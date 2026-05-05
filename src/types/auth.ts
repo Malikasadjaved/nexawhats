@@ -26,6 +26,8 @@ export interface Contact {
   verifiedName?: string;
   imgUrl?: string | null;
   status?: string;
+  /** LID (Linked Identity) — populated after pair-success. */
+  lid?: string;
 }
 
 /** Account settings */

@@ -1,7 +1,6 @@
 /**
- * Basic bot example — minimal NexaWhats client with middleware + logging.
+ * Basic bot example — minimal NexaWhats client with middleware + echo.
  *
- * This example shows the smallest useful setup:
  *   1. Persistent auth via FileAuthStore (Baileys-compatible layout).
  *   2. Middleware pipeline logging every inbound message.
  *   3. An echo handler that replies to any direct (non-group) text.
@@ -9,23 +8,17 @@
  * Run (manual, against live WhatsApp):
  *   npx tsx examples/basic-bot/index.ts
  *
- * On first run you will see a QR code in the terminal — scan it from
- * WhatsApp → Linked Devices. The session is persisted under
- * `./auth/` and subsequent runs skip the QR step.
- *
- * NOTE: v0.1.0 ships transport + middleware + queue end-to-end, but
- * message encrypt/decrypt is deferred to 0.2.0. Until then `client.send`
- * throws NotImplementedError. This example remains useful as an
- * integration-smoke harness for the stores, queue, and middleware.
+ * On first run scan the QR code from WhatsApp → Linked Devices.
+ * The session persists under `./auth/` — subsequent runs skip the QR step.
  */
 
 import {
+  FileAuthStore,
   antiBan,
   createClient,
-  FileAuthStore,
   lidResolver,
   messageLogger,
-} from 'nexawhats';
+} from '../../src/index.js';
 
 async function main(): Promise<void> {
   const store = new FileAuthStore('./auth');
@@ -37,14 +30,14 @@ async function main(): Promise<void> {
     metrics: { prometheus: true, port: 9100 },
   });
 
-  // LID → phone translation so your middleware only sees canonical JIDs.
+  // LID → phone translation so middleware only sees canonical JIDs.
   client.use(lidResolver());
   // Gaussian delay between sends — reduces ban risk.
   client.use(antiBan({ minDelay: 1000, maxDelay: 3000 }));
-  // Structured console log of every inbound ctx.
+  // Structured console log of every inbound message.
   client.use(messageLogger());
 
-  // Custom middleware: reply to direct text messages.
+  // Echo handler — reply to any direct (non-group) text not from self.
   client.use(async (ctx, next) => {
     if (!ctx.isGroup && ctx.text && !ctx.message.key.fromMe) {
       await ctx.reply({ text: `echo: ${ctx.text}` });

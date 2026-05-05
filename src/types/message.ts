@@ -6,6 +6,10 @@ export interface WAMessageKey {
   fromMe?: boolean | null;
   id?: string | null;
   participant?: string | null;
+  /** Alternate participant JID (LID when primary is PN, or vice versa). */
+  participantAlt?: string | null;
+  /** Alternate remote JID for LID/PN dual addressing. */
+  remoteJidAlt?: string | null;
 }
 
 /** Incoming WhatsApp message */
@@ -17,6 +21,10 @@ export interface WAMessage {
   status?: WAMessageStatus;
   participant?: string | null;
   broadcast?: boolean;
+  /** Stub type for system-generated messages (group events, ciphertext errors, etc.). */
+  messageStubType?: number | null;
+  /** Parameters for stub messages. */
+  messageStubParameters?: string[] | null;
 }
 
 /** Message status */
@@ -78,6 +86,28 @@ export interface WAMessageContent {
   viewOnceMessageV2?: {
     message?: WAMessageContent | null;
   } | null;
+  /** Protocol messages — revoke, edit, history sync, etc. */
+  protocolMessage?: {
+    type?: number | null;
+    key?: WAMessageKey | null;
+    editedMessage?: WAMessageContent | null;
+    historySyncNotification?: unknown | null;
+    ephemeralExpiration?: number | null;
+    appStateSyncKeyShare?: unknown | null;
+    peerDataOperationRequestResponseMessage?: unknown | null;
+  } | null;
+  /** Sender key distribution message (group encryption). */
+  senderKeyDistributionMessage?: {
+    groupId?: string | null;
+    axolotlSenderKeyDistributionMessage?: Uint8Array | null;
+  } | null;
+  /** Device-sent message wrapper (for own-device path). */
+  deviceSentMessage?: {
+    destinationJid?: string | null;
+    message?: WAMessageContent | null;
+  } | null;
+  /** Allow any other proto fields at runtime. */
+  [key: string]: unknown;
 }
 
 /** Context info attached to messages */

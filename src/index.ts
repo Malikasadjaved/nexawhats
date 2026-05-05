@@ -51,6 +51,30 @@ export {
   type NoiseServerHello,
   type RoutingInfo,
 } from './socket/noise.js';
+export {
+  performHandshake,
+  type HandshakeIO,
+  type PerformHandshakeOptions,
+} from './socket/handshake.js';
+export {
+  createKeepAlive,
+  type KeepAliveOptions,
+  type KeepAliveController,
+} from './socket/keepalive.js';
+export {
+  bytesToCrockford,
+  derivePairingCodeKey,
+  generatePairingCode,
+  generatePairingKey,
+  buildPairDeviceIQ,
+  processPairSuccess,
+} from './socket/pairing.js';
+export {
+  connectOnce,
+  DEFAULT_WA_URL,
+  type ConnectOnceOptions,
+  type ConnectOnceResult,
+} from './client/connect.js';
 
 // Queue
 export { MessageQueue, RateLimiter, DeadLetterQueue } from './queue/index.js';
@@ -159,8 +183,17 @@ export {
   Curve,
   type RawKeyPair,
 } from './utils/crypto.js';
+export { initAuthCreds } from './utils/auth.js';
 export { createLogger, defaultLogger, silentLogger } from './utils/logger.js';
 export { getPlatform, getDefaultDataDir } from './utils/platform.js';
+
+// Groups
+export {
+  makeGroupOperations,
+  extractGroupMetadata,
+  type GroupOperations,
+  type GroupOperationsConfig,
+} from './groups/index.js';
 
 // Proto — dynamic WAProto bridge over optional `@whiskeysockets/baileys` dep.
 // `proto` is a runtime proxy; consumers wanting strict protobuf types

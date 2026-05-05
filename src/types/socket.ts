@@ -87,6 +87,15 @@ export interface ClientConfig {
   /** Keep-alive interval in ms (default: 25000) */
   keepAliveIntervalMs?: number;
 
+  /**
+   * Phone number for first-time pairing (no country code prefix).
+   * Required when `auth.creds.registered` is false.
+   */
+  phoneNumber?: string;
+
+  /** Custom 8-char pairing code (generated if not provided). */
+  customPairingCode?: string;
+
   /** Reconnection configuration */
   reconnect?: Partial<ReconnectConfig>;
 

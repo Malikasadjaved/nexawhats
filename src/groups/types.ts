@@ -1,6 +1,7 @@
-// Re-export group types from events (where they're defined)
 export type {
-  GroupMetadata,
-  GroupParticipant,
-  ParticipantAction,
-} from '../types/events.js';
+  GroupAction,
+  GroupMemberAddMode,
+  GroupMetadataFull,
+  GroupRequestAction,
+  GroupSetting,
+} from '../types/group.js';

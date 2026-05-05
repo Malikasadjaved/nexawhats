@@ -1,45 +1,38 @@
 import { EventEmitter } from 'node:events';
+import type { Logger } from 'pino';
+import type { BinaryNode } from './binary/index.js';
+import { isJidGroup, jidNormalizedUser } from './binary/jid.js';
+import { connectOnce } from './client/connect.js';
+import { type GroupOperations, makeGroupOperations } from './groups/index.js';
 import { extractText, isGroupMessage } from './messages/receive.js';
+import { cleanMessage, decryptMessageNode, isRealMessage } from './messages/recv.js';
+import { makeMessageRelay } from './messages/send-relay.js';
 import { MessageSender } from './messages/send.js';
 import { type Context, type Middleware, MiddlewarePipeline } from './middleware/index.js';
+import { HealthServer, type HealthSnapshot, NexaWhatsMetrics } from './observability/index.js';
 import {
-  HealthServer,
-  type HealthSnapshot,
-  NexaWhatsMetrics,
-} from './observability/index.js';
+  DEFAULT_BROWSER,
+  DEFAULT_VERSION,
+  generateLoginNode,
+  generateRegistrationNode,
+} from './proto/payload.js';
 import { MessageQueue } from './queue/index.js';
+import { type SignalRepository, makeLibSignalRepository } from './signal/libsignal.js';
 import { CircuitBreaker } from './socket/circuit-breaker.js';
+import { processPairSuccess } from './socket/pairing.js';
 import { ConnectionStateMachine } from './socket/state-machine.js';
 import type { AuthStore } from './store/interface.js';
+import type { AuthenticationCreds, AuthenticationState } from './types/auth.js';
 import type { NexaWhatsEventMap } from './types/events.js';
-import type { AnyMessageContent, MessagePriority, WAMessage } from './types/message.js';
+import type { WAMessage, WAMessageUpdate } from './types/message.js';
+import type { AnyMessageContent, MessagePriority } from './types/message.js';
 import type { ClientConfig, ConnectionState } from './types/socket.js';
+import { initAuthCreds } from './utils/auth.js';
+import { Curve, generateMessageId } from './utils/crypto.js';
+import { silentLogger } from './utils/logger.js';
 
 /**
  * NexaWhats client — the main entry point.
- *
- * @example
- * ```typescript
- * import { createClient, MemoryAuthStore } from 'nexawhats';
- *
- * const client = createClient({
- *   auth: await new MemoryAuthStore().loadState(),
- *   queue: { messagesPerMinute: 20, humanLikeTiming: true },
- * });
- *
- * client.use(async (ctx, next) => {
- *   console.log('Received:', ctx.text);
- *   await next();
- * });
- *
- * client.on('messages.upsert', ({ messages }) => {
- *   for (const msg of messages) {
- *     client.send(msg.key.remoteJid!, { text: 'Hello!' });
- *   }
- * });
- *
- * await client.connect();
- * ```
  */
 export class NexaWhatsClient extends EventEmitter {
   readonly config: ClientConfig;
@@ -52,17 +45,22 @@ export class NexaWhatsClient extends EventEmitter {
   private healthServer: HealthServer | null = null;
   private readonly startedAt = Date.now();
   private store: AuthStore | null = null;
+  private stopReconnect = false;
+  private disposeConnect: (() => void) | null = null;
+
+  // ── Live-connection state (populated after successful connect) ──────
+  private signalRepository: SignalRepository | null = null;
+  private messageRelay: ReturnType<typeof makeMessageRelay> | null = null;
+  groupOps: GroupOperations | null = null;
 
   constructor(config: ClientConfig) {
     super();
     this.config = config;
 
-    // Initialize metrics (disabled by default — zero overhead).
     this.metrics = new NexaWhatsMetrics({
       enabled: config.metrics?.prometheus ?? false,
     });
 
-    // Initialize connection state machine
     this.connection = new ConnectionStateMachine();
     this.connection.on('transition', (_from, to) => {
       this.metrics.setConnectionState(to);
@@ -70,30 +68,24 @@ export class NexaWhatsClient extends EventEmitter {
         connection: to,
       } satisfies Partial<ConnectionState>);
     });
-    // Seed the gauge to match initial state.
     this.metrics.setConnectionState(this.connection.state);
 
-    // Initialize circuit breaker
     this.circuitBreaker = new CircuitBreaker(config.circuitBreaker);
     this.circuitBreaker.on('state-change', (event) => {
-      // Event shape is { state: 'closed' | 'open' | 'half-open', ... }
       const next = (event as { state?: string }).state;
       if (next) this.metrics.setCircuitBreakerState(next);
       this.emit('circuit-breaker.state-change', event);
     });
 
-    // Initialize message queue
     this.queue = new MessageQueue({
       messagesPerMinute: config.queue?.messagesPerMinute,
       humanLikeTiming: config.queue?.humanLikeTiming,
       maxRetries: config.queue?.maxRetries,
     });
 
-    // Initialize message sender
     this.sender = new MessageSender();
     this.sender.setQueue(this.queue);
 
-    // Initialize middleware pipeline
     this.middleware = new MiddlewarePipeline();
   }
 
@@ -109,13 +101,6 @@ export class NexaWhatsClient extends EventEmitter {
     return this;
   }
 
-  /**
-   * Send a message (through the queue).
-   *
-   * @example
-   * await client.send('923124166950@s.whatsapp.net', { text: 'Hello!' });
-   * await client.send(jid, { image: buffer, caption: 'Photo' }, 'high');
-   */
   async send(
     jid: string,
     content: AnyMessageContent,
@@ -124,16 +109,12 @@ export class NexaWhatsClient extends EventEmitter {
     return this.sender.send(jid, content, priority);
   }
 
-  /**
-   * Connect to WhatsApp.
-   *
-   * Phase 7 wires up observability here (health + metrics). The Noise
-   * handshake + WebSocket negotiation are Track B (Phase 6b).
-   */
-  async connect(): Promise<void> {
-    this.connection.transition('connecting');
+  // ── Connect ──────────────────────────────────────────────────────
 
-    // Start the health server if configured.
+  async connect(): Promise<void> {
+    this.stopReconnect = false;
+    const logger: Logger = (this.config.logger as Logger | undefined) ?? silentLogger;
+
     if (this.config.metrics?.prometheus && this.config.metrics.port) {
       this.healthServer = new HealthServer({
         port: this.config.metrics.port,
@@ -143,13 +124,309 @@ export class NexaWhatsClient extends EventEmitter {
       await this.healthServer.start();
     }
 
-    // Phase 6b: Noise handshake, WebSocket connect, auth exchange
+    const creds: AuthenticationCreds = this.config.auth.creds?.noiseKey
+      ? this.config.auth.creds
+      : (initAuthCreds() as AuthenticationCreds);
+
+    if (!creds.pairingCode && this.config.phoneNumber) {
+      creds.pairingCode = this.config.customPairingCode ?? initAuthCreds().pairingCode;
+      creds.me = {
+        id: `${this.config.phoneNumber}@s.whatsapp.net`,
+        name: '~',
+      };
+    }
+
+    const browser = (this.config.browser ?? DEFAULT_BROWSER) as readonly [string, string, string];
+    const version = (this.config.version ?? DEFAULT_VERSION) as readonly [number, number, number];
+    const connectTimeoutMs = this.config.connectTimeoutMs ?? 20_000;
+    const keepAliveIntervalMs = this.config.keepAliveIntervalMs ?? 25_000;
+
+    const payloadConfig = { version, browser, countryCode: 'US' };
+
+    // ── Shared mutable refs (populated after successful connect) ──
+    let sendNodeRef: ((node: BinaryNode) => Promise<void>) | null = null;
+
+    // IQ response resolver — maps stanza id → promise handlers
+    const pendingQueries = new Map<
+      string,
+      {
+        resolve: (node: BinaryNode) => void;
+        reject: (err: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    >();
+
+    // Create signal repository from auth state (keys store is shared across reconnects)
+    this.signalRepository = makeLibSignalRepository(
+      this.config.auth,
+      logger.child({ class: 'signal' }),
+    );
+
+    let backoffIdx = 0;
+    const maxBackoff = this.config.reconnect?.maxRetries ?? 10;
+    const backoffDelays = this.config.reconnect?.backoffDelays ?? [
+      1000, 2000, 4000, 8000, 16000, 30000,
+    ];
+
+    while (!this.stopReconnect) {
+      if (!this.circuitBreaker.isAllowed) {
+        const waitMs = this.circuitBreaker.cooldownRemainingMs;
+        if (waitMs > 0) {
+          await new Promise((r) => setTimeout(r, waitMs));
+        }
+        continue;
+      }
+
+      try {
+        this.connection.transition('connecting');
+
+        const meId = creds.me?.id ?? '';
+        const isLogin = !!(meId && creds.registered);
+        const clientPayload = isLogin
+          ? generateLoginNode(meId, payloadConfig)
+          : generateRegistrationNode(creds, payloadConfig);
+
+        const ephemeralKeyPair = Curve.generateKeyPair();
+        let pairSuccessReceived = false;
+
+        const result = await connectOnce({
+          creds,
+          ephemeralKeyPair,
+          clientPayload,
+          onFrame: (node) => {
+            const { tag } = node;
+            const attrs: Record<string, string> = (node.attrs ?? {}) as Record<string, string>;
+
+            // ── Login success ─────────────────────────────────
+            if (tag === 'success') {
+              logger.info('login success');
+              creds.registered = true;
+              this.connection.transition('connected');
+              this.circuitBreaker.recordSuccess();
+              return;
+            }
+
+            // ── Login failure ─────────────────────────────────
+            if (tag === 'failure') {
+              const reason = attrs.reason ?? 'unknown';
+              logger.error({ reason }, 'login failure');
+              throw new Error(`Login failure: ${reason}`);
+            }
+
+            // ── Stream error ──────────────────────────────────
+            if (tag === 'stream:error') {
+              const text = Array.isArray(node.content)
+                ? ((node.content[0] as { tag?: string })?.tag ?? 'unknown')
+                : 'unknown';
+              logger.error({ text }, 'stream error');
+              throw new Error(`Stream error: ${text}`);
+            }
+
+            // ── QR pair-device ────────────────────────────────
+            if (tag === 'iq' && attrs.type === 'set') {
+              const content = Array.isArray(node.content) ? node.content : [];
+              const pairDevice = content.find(
+                (c) =>
+                  typeof c === 'object' &&
+                  c !== null &&
+                  (c as { tag?: string }).tag === 'pair-device',
+              );
+              if (pairDevice) {
+                const noiseKeyB64 = Buffer.from(creds.noiseKey.public).toString('base64');
+                const identityKeyB64 = Buffer.from(creds.signedIdentityKey.public).toString(
+                  'base64',
+                );
+                const advB64 = creds.advSecretKey;
+
+                const pdContent = Array.isArray((pairDevice as { content?: unknown[] }).content)
+                  ? ((pairDevice as { content: unknown[] }).content as Array<{
+                      tag?: string;
+                      content?: unknown;
+                    }>)
+                  : [];
+                const refNode = pdContent.find((c) => c.tag === 'ref');
+
+                if (refNode) {
+                  const ref = Buffer.isBuffer(refNode.content)
+                    ? refNode.content.toString('utf-8')
+                    : String(refNode.content ?? '');
+                  const qr = [ref, noiseKeyB64, identityKeyB64, advB64].join(',');
+                  this.emit('connection.update', {
+                    qr,
+                    connection: this.connection.state,
+                  });
+                }
+                return;
+              }
+            }
+
+            // ── Pair-success ──────────────────────────────────
+            if (tag === 'iq') {
+              const content = Array.isArray(node.content) ? node.content : [];
+              const pairSuccess = content.find(
+                (c) =>
+                  typeof c === 'object' &&
+                  c !== null &&
+                  (c as { tag?: string }).tag === 'pair-success',
+              );
+              if (pairSuccess) {
+                logger.debug('pair success recv');
+                try {
+                  const { creds: updated, reply } = processPairSuccess(node, creds);
+                  Object.assign(creds, updated);
+                  creds.registered = true;
+                  this.emit('creds.update', creds);
+                  this.emit('connection.update', {
+                    isNewLogin: true,
+                    qr: undefined,
+                    connection: this.connection.state,
+                  });
+                  result.sendNode(reply).catch((err: unknown) => {
+                    logger.error({ err }, 'pair-success reply failed');
+                  });
+                  pairSuccessReceived = true;
+                } catch (err) {
+                  logger.error({ err }, 'error in pairing');
+                  throw err;
+                }
+                return;
+              }
+            }
+
+            // ── IQ response (resolve pending queries) ─────────
+            if (tag === 'iq') {
+              const pending = pendingQueries.get(attrs.id);
+              if (pending) {
+                clearTimeout(pending.timer);
+                pendingQueries.delete(attrs.id);
+                if (attrs.type === 'error') {
+                  pending.reject(new Error(`IQ error (${attrs.id}): ${JSON.stringify(attrs)}`));
+                } else {
+                  pending.resolve(node);
+                }
+                return;
+              }
+              // Unmatched IQ — could be server push; ignore for now
+              return;
+            }
+
+            // ── Message stanza ────────────────────────────────
+            if (tag === 'message') {
+              void this.handleMessageStanza(node);
+              return;
+            }
+
+            // ── Receipt stanza ────────────────────────────────
+            if (tag === 'receipt') {
+              this.handleReceiptStanza(node, attrs);
+              return;
+            }
+
+            // ── Notification stanza (group events, etc.) ──────
+            if (tag === 'notification') {
+              this.handleNotificationStanza(node, attrs);
+              return;
+            }
+          },
+          logger: logger.child({ class: 'connect' }),
+          browser: [...browser] as [string, string, string],
+          version: [...version] as [number, number, number],
+          connectTimeoutMs,
+          keepAliveIntervalMs,
+        });
+
+        this.disposeConnect = result.dispose;
+
+        // ── Populate mutable refs ────────────────────────────
+        sendNodeRef = result.sendNode;
+
+        // ── IQ query helper ──────────────────────────────────
+        const query = async (node: BinaryNode): Promise<BinaryNode> => {
+          const sn = sendNodeRef;
+          if (!sn) throw new Error('sendNode not available');
+          const id = (node.attrs.id as string) || generateMessageId();
+          node.attrs.id = id;
+          return new Promise<BinaryNode>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              pendingQueries.delete(id);
+              reject(new Error(`IQ query timeout: ${id}`));
+            }, 30_000);
+            pendingQueries.set(id, { resolve, reject, timer });
+            sn(node).catch((err) => {
+              clearTimeout(timer);
+              pendingQueries.delete(id);
+              reject(err);
+            });
+          });
+        };
+
+        // ── Message relay ────────────────────────────────────
+        const authState: AuthenticationState = {
+          creds,
+          keys: this.config.auth.keys,
+        };
+        this.messageRelay = makeMessageRelay({
+          sendNode: result.sendNode,
+          signalRepository: this.signalRepository,
+          auth: authState,
+          logger: logger.child({ class: 'relay' }),
+          query,
+        });
+
+        // Wire into sender + queue
+        const directSend = async (
+          jid: string,
+          content: AnyMessageContent,
+        ): Promise<WAMessage | undefined> => {
+          return this.messageRelay?.sendMessage(jid, content);
+        };
+        this.sender.setDirectSendFn(directSend);
+        this.queue.setSendFn(async (jid: string, content: AnyMessageContent) => {
+          await this.messageRelay?.sendMessage(jid, content);
+        });
+
+        // ── Group operations ─────────────────────────────────
+        this.groupOps = makeGroupOperations({ query });
+
+        // ── Post-connect ─────────────────────────────────────
+        if (pairSuccessReceived) {
+          logger.info('pairing complete, waiting for reconnect...');
+          this.connection.transition('reconnecting');
+          continue;
+        }
+
+        if (this.connection.state !== 'connected') {
+          logger.warn('connect ended without success stanza');
+        }
+
+        backoffIdx = 0;
+        return;
+      } catch (err) {
+        this.circuitBreaker.recordFailure();
+        logger.error({ err }, 'connect attempt failed');
+
+        if (backoffIdx < maxBackoff) {
+          const delay = backoffDelays[backoffIdx] ?? backoffDelays[backoffDelays.length - 1];
+          logger.info({ delay, attempt: backoffIdx + 1 }, 'reconnecting...');
+          this.connection.transition('reconnecting');
+          await new Promise((r) => setTimeout(r, delay));
+          backoffIdx++;
+        } else {
+          logger.error('max reconnect attempts exhausted');
+          this.connection.transition('disconnected');
+          throw err;
+        }
+      }
+    }
   }
 
-  /**
-   * Disconnect gracefully.
-   */
+  /** Disconnect gracefully. */
   async disconnect(): Promise<void> {
+    this.stopReconnect = true;
+    if (this.disposeConnect) {
+      this.disposeConnect();
+      this.disposeConnect = null;
+    }
     if (this.connection.isConnected || this.connection.isConnecting) {
       this.connection.reset();
     }
@@ -158,6 +435,8 @@ export class NexaWhatsClient extends EventEmitter {
       await this.healthServer.stop();
       this.healthServer = null;
     }
+    this.messageRelay = null;
+    this.groupOps = null;
   }
 
   /** Snapshot of runtime state for /health. */
@@ -175,10 +454,6 @@ export class NexaWhatsClient extends EventEmitter {
     };
   }
 
-  /**
-   * Process an incoming message through the middleware pipeline.
-   * Called internally when a message is received.
-   */
   async processMessage(message: WAMessage): Promise<void> {
     const jid = message.key.remoteJid ?? '';
 
@@ -194,7 +469,6 @@ export class NexaWhatsClient extends EventEmitter {
         await this.send(jid, content, 'high');
       },
       resolveLID: async (lid: string) => {
-        // Phase 6: actual LID resolution via Signal repository
         return lid;
       },
       state: {},
@@ -203,49 +477,268 @@ export class NexaWhatsClient extends EventEmitter {
     await this.middleware.execute(ctx);
   }
 
-  /** Whether the client is currently connected */
   get isConnected(): boolean {
     return this.connection.isConnected;
   }
 
-  /** Current connection state */
   get connectionState(): string {
     return this.connection.state;
   }
 
-  /** Current queue depth */
   get queueDepth(): number {
     return this.queue.depth;
   }
+
+  // ── Private stanza handlers (defined as methods so they close over `this`) ──
+
+  /**
+   * Handle an incoming `<message>` stanza: decode, decrypt, and emit events.
+   */
+  private async handleMessageStanza(node: BinaryNode): Promise<void> {
+    const logger: Logger = (this.config.logger as Logger | undefined) ?? silentLogger;
+
+    const creds = this.config.auth.creds;
+    const meId = creds.me?.id ?? '';
+    const meLid = creds.me?.lid;
+
+    // Check ignore filter
+    const fromJid = (node.attrs.from || node.attrs.participant) as string | undefined;
+    if (fromJid && this.config.shouldIgnoreJid?.(jidNormalizedUser(fromJid))) {
+      return;
+    }
+
+    if (!this.signalRepository) {
+      logger.warn('no signal repository — cannot decrypt message');
+      return;
+    }
+
+    const decryptable = decryptMessageNode(
+      node,
+      meId,
+      meLid,
+      this.signalRepository,
+      logger.child({ class: 'recv' }),
+    );
+
+    try {
+      await decryptable.decrypt();
+      cleanMessage(decryptable.fullMessage, meId, meLid);
+
+      const message = decryptable.fullMessage;
+      const content = message.message;
+
+      // Emit messages.upsert for all messages
+      this.emit('messages.upsert', {
+        messages: [message],
+        type: 'notify',
+      });
+
+      // Emit reaction
+      if (content?.reactionMessage) {
+        const rxn = content.reactionMessage;
+        const rxnKey = rxn.key;
+        if (rxnKey) {
+          this.emit('messages.reaction', [
+            {
+              key: {
+                remoteJid: rxnKey.remoteJid,
+                fromMe: rxnKey.fromMe,
+                id: rxnKey.id,
+                participant: rxnKey.participant,
+              },
+              reaction: { text: rxn.text ?? '' },
+            },
+          ]);
+        }
+      }
+
+      // Emit message updates for poll updates
+      if (content?.pollUpdateMessage) {
+        const update: WAMessageUpdate = {
+          key: message.key,
+          update: { message: content },
+        };
+        this.emit('messages.update', [update]);
+      }
+
+      // Emit for protocol messages (edits, revokes)
+      if (content?.protocolMessage) {
+        const pm = content.protocolMessage;
+        if (pm.type !== undefined && pm.key) {
+          const update: WAMessageUpdate = {
+            key: {
+              remoteJid: pm.key.remoteJid,
+              fromMe: pm.key.fromMe,
+              id: pm.key.id,
+              participant: pm.key.participant,
+            },
+            update: {
+              message: content,
+              messageStubType: pm.type ?? undefined,
+            },
+          };
+          this.emit('messages.update', [update]);
+        }
+      }
+
+      // Run middleware pipeline for real messages
+      if (isRealMessage(message)) {
+        await this.processMessage(message);
+      }
+    } catch (err) {
+      logger.error({ err, stanzaId: node.attrs.id }, 'message stanza processing failed');
+    }
+  }
+
+  /**
+   * Handle an incoming `<receipt>` stanza and emit update events.
+   */
+  private handleReceiptStanza(_node: BinaryNode, attrs: Record<string, string>): void {
+    const id = attrs.id;
+    const type = attrs.type;
+    const from = attrs.from;
+    const participant = attrs.participant;
+    const recipient = attrs.recipient;
+    const t = attrs.t ? Number(attrs.t) : undefined;
+
+    if (!id || !type) return;
+
+    // Build key from receipt attrs
+    const key = {
+      remoteJid: from ?? recipient ?? '',
+      fromMe: !from || from === this.config.auth.creds.me?.id,
+      id,
+      participant: participant ?? undefined,
+    };
+
+    if (type === 'read' || type === 'read-self') {
+      const updates: WAMessageUpdate[] = [
+        {
+          key,
+          update: {
+            status: 'READ',
+          },
+        },
+      ];
+      this.emit('messages.update', updates);
+
+      this.emit('message-receipt.update', [
+        {
+          key,
+          receipt: {
+            userJid: participant ?? from ?? '',
+            readTimestamp: t,
+            receiptTimestamp: t ?? Math.floor(Date.now() / 1000),
+          },
+        },
+      ]);
+    } else if (type === 'sender' || type === 'delivery') {
+      this.emit('message-receipt.update', [
+        {
+          key,
+          receipt: {
+            userJid: participant ?? from ?? '',
+            receiptTimestamp: t ?? Math.floor(Date.now() / 1000),
+          },
+        },
+      ]);
+    }
+  }
+
+  /**
+   * Handle an incoming `<notification>` stanza.
+   *
+   * Notifications cover group events (subject change, participant add/remove,
+   * picture change, ephemeral toggle, etc.) and other server-initiated updates.
+   */
+  private handleNotificationStanza(node: BinaryNode, attrs: Record<string, string>): void {
+    const logger: Logger = (this.config.logger as Logger | undefined) ?? silentLogger;
+
+    const from = attrs.from;
+    const type = attrs.type;
+
+    logger.debug({ from, type, attrs }, 'notification stanza');
+
+    // Group notifications
+    if (from && isJidGroup(from)) {
+      const content = Array.isArray(node.content) ? node.content : [];
+
+      for (const child of content) {
+        if (typeof child !== 'object' || child === null) continue;
+        const c = child as BinaryNode;
+
+        switch (c.tag) {
+          case 'subject': {
+            this.emit('groups.update', [
+              {
+                id: from,
+                subject: c.attrs.subject as string,
+                subjectTime: Number(c.attrs.t) || undefined,
+                subjectOwner: c.attrs.s_o ? jidNormalizedUser(c.attrs.s_o as string) : undefined,
+              },
+            ]);
+            break;
+          }
+          case 'add':
+          case 'remove':
+          case 'promote':
+          case 'demote': {
+            const participants = Array.isArray(c.content)
+              ? (c.content as BinaryNode[]).map((p) => ({
+                  id: p.attrs.jid as string,
+                  isAdmin: (p.attrs.type as string) === 'admin',
+                  isSuperAdmin: (p.attrs.type as string) === 'superadmin',
+                }))
+              : [];
+            this.emit('group-participants.update', {
+              id: from,
+              author: c.attrs.author ? jidNormalizedUser(c.attrs.author as string) : '',
+              participants,
+              action: c.tag,
+            });
+            break;
+          }
+          case 'ephemeral': {
+            this.emit('groups.update', [
+              {
+                id: from,
+                ephemeralDuration: Number(c.attrs.expiration) || undefined,
+              },
+            ]);
+            break;
+          }
+          case 'not_ephemeral': {
+            this.emit('groups.update', [{ id: from, ephemeralDuration: undefined }]);
+            break;
+          }
+          default:
+            break;
+        }
+      }
+      return;
+    }
+
+    // Other notifications (presence, calls, etc.) — emit raw for now
+    logger.debug({ attrs }, 'unhandled notification type');
+  }
 }
 
-// Typed event helpers (avoids unsafe declaration merging)
-/** Type-safe event listener registration */
+// Typed event helpers
 export type TypedOn = <T extends keyof NexaWhatsEventMap>(
   event: T,
   listener: (arg: NexaWhatsEventMap[T]) => void,
 ) => NexaWhatsClient;
 
-/** Type-safe event listener removal */
 export type TypedOff = <T extends keyof NexaWhatsEventMap>(
   event: T,
   listener: (arg: NexaWhatsEventMap[T]) => void,
 ) => NexaWhatsClient;
 
-/** Type-safe event emission */
 export type TypedEmit = <T extends keyof NexaWhatsEventMap>(
   event: T,
   arg: NexaWhatsEventMap[T],
 ) => boolean;
 
-/**
- * Create a new NexaWhats client.
- *
- * @example
- * const client = createClient({
- *   auth: await store.loadState(),
- * });
- */
 export function createClient(config: ClientConfig): NexaWhatsClient {
   return new NexaWhatsClient(config);
 }

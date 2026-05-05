@@ -138,6 +138,16 @@ export function aesDecryptGCM(
   return Buffer.concat([decipher.update(enc), decipher.final()]);
 }
 
+/** AES-256-CTR encrypt. Used for pairing code key wrapping. */
+export function aesEncryptCTR(
+  plaintext: Buffer | Uint8Array,
+  key: Buffer | Uint8Array,
+  iv: Buffer | Uint8Array,
+): Buffer {
+  const cipher = createCipheriv('aes-256-ctr', key, iv);
+  return Buffer.concat([cipher.update(plaintext), cipher.final()]);
+}
+
 /** HMAC-SHA256. */
 export function hmacSha256(key: Buffer, data: Buffer): Buffer {
   return createHmac('sha256', key).update(data).digest();
@@ -255,7 +265,51 @@ export const Curve = {
       }),
     );
   },
+
+  sign(privateKey: Buffer | Uint8Array, message: Buffer | Uint8Array): Buffer {
+    // libsignal's curve.calculateSignature is the Ed25519-on-Curve25519
+    // variant WhatsApp uses — identity key signatures + signed pre-keys
+    // all go through this. Baileys delegates to the same function.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const curve = require('libsignal/src/curve.js') as {
+      calculateSignature(priv: Uint8Array, msg: Uint8Array): Uint8Array;
+    };
+    return Buffer.from(curve.calculateSignature(privateKey, message));
+  },
+
+  verify(
+    publicKey: Buffer | Uint8Array,
+    message: Buffer | Uint8Array,
+    signature: Buffer | Uint8Array,
+  ): boolean {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const curve = require('libsignal/src/curve.js') as {
+      verifySignature(pub: Uint8Array, msg: Uint8Array, sig: Uint8Array): void;
+    };
+    try {
+      curve.verifySignature(generateSignalPubKey(publicKey), message, signature);
+      return true;
+    } catch {
+      return false;
+    }
+  },
 };
+
+/** Sign a freshly generated pre-key with the identity key. */
+export function signedKeyPair(
+  identityKeyPair: RawKeyPair,
+  keyId: number,
+): { keyPair: RawKeyPair; signature: Buffer; keyId: number } {
+  const preKey = Curve.generateKeyPair();
+  const pubKey = generateSignalPubKey(preKey.public);
+  const signature = Curve.sign(identityKeyPair.private, pubKey);
+  return { keyPair: preKey, signature, keyId };
+}
+
+/** Random 14-bit WhatsApp registration id (same shape as Baileys). */
+export function generateRegistrationId(): number {
+  return Uint16Array.from(generateRandomBytes(2))[0] & 16383;
+}
 
 /**
  * Signal protocol version byte prefixed to public keys in several

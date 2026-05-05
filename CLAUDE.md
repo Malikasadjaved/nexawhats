@@ -10,8 +10,7 @@ Context for Claude Code when working in this repository.
 drop-in replacement for Baileys with pluggable auth stores, middleware,
 observability, and a cleaner TypeScript surface.
 
-- **Current version:** `0.1.0` (Track A shipped — primitives + drop-in
-  auth) + Track B in progress (Phase 1 protocol, Phase 6 live transport)
+- **Current version:** `0.1.0` → heading toward `0.2.0`
 - **Target version:** `0.2.0` — first release that can actually
   send/receive WhatsApp messages
 - **Source of truth for the protocol port:** Baileys v7.0.0-rc.9 at
@@ -35,32 +34,44 @@ D:/nexawhats/
 │
 ├── src/
 │   ├── index.ts                       # Public barrel — exports client, stores, types, middleware
-│   ├── client.ts                      # WaClient — connect() currently stubs live transport
+│   ├── client.ts                      # NexaWhatsClient — full connect loop with retry, events, middleware
+│   ├── client/
+│   │   └── connect.ts                 # Single-connection driver (WebSocket + Noise + keepalive)
 │   ├── binary/
 │   │   ├── index.ts                   # Barrel (codec + jid utils)
 │   │   ├── codec.ts                   # decodeBinaryNode / encodeBinaryNode
 │   │   └── jid.ts                     # Port of Baileys WABinary/jid-utils (D4.4b)
 │   ├── signal/
-│   │   ├── group/                     # Signal Group ciphers (D4.4d + D4.4e, committed 804a94c)
-│   │   │   ├── index.ts               # Barrel
-│   │   │   ├── buffer-json.ts         # Buffer↔JSON replacer/reviver
-│   │   │   ├── sender-key-name.ts     # (group, sender) identifier
-│   │   │   ├── sender-key-record.ts   # Versioned state container
-│   │   │   ├── sender-key-state.ts    # Chain + signing key state
-│   │   │   ├── sender-chain-key.ts    # HKDF ratchet
-│   │   │   ├── sender-message-key.ts  # Per-message key derivation
-│   │   │   ├── keyhelper.ts           # sender-key / signing-key generation
-│   │   │   ├── ciphertext-message.ts  # v1/v2 framing base
-│   │   │   ├── sender-key-message.ts  # HMAC-signed encrypted body
-│   │   │   ├── sender-key-distribution-message.ts   # SKDM envelope
-│   │   │   ├── group-cipher.ts        # Encrypt/decrypt with SenderKeyStore
-│   │   │   ├── group-session-builder.ts
-│   │   │   └── libsignal-crypto.d.ts  # Ambient types for libsignal/src/*.js
-│   │   └── lid-mapping.ts             # LIDMappingStore (D4.4f, committed 804a94c)
+│   │   ├── libsignal.ts               # Signal repository orchestrator (D4.4g — shipped)
+│   │   ├── lid-mapping.ts             # LIDMappingStore (D4.4f)
+│   │   ├── keys.ts                    # CacheableSignalKeyStore wrapper
+│   │   └── group/                     # Signal Group ciphers (D4.4d + D4.4e)
+│   │       ├── index.ts               # Barrel
+│   │       ├── buffer-json.ts         # Buffer↔JSON replacer/reviver
+│   │       ├── sender-key-name.ts     # (group, sender) identifier
+│   │       ├── sender-key-record.ts   # Versioned state container
+│   │       ├── sender-key-state.ts    # Chain + signing key state
+│   │       ├── sender-chain-key.ts    # HKDF ratchet
+│   │       ├── sender-message-key.ts  # Per-message key derivation
+│   │       ├── keyhelper.ts           # sender-key / signing-key generation
+│   │       ├── ciphertext-message.ts  # v1/v2 framing base
+│   │       ├── sender-key-message.ts  # HMAC-signed encrypted body
+│   │       ├── sender-key-distribution-message.ts   # SKDM envelope
+│   │       ├── group-cipher.ts        # Encrypt/decrypt with SenderKeyStore
+│   │       ├── group-session-builder.ts
+│   │       └── libsignal-crypto.d.ts  # Ambient types for libsignal/src/*.js
 │   ├── socket/
+│   │   ├── index.ts                   # Barrel
 │   │   ├── noise.ts                   # Noise XX handshake (D2)
-│   │   └── transport.ts               # WsTransport (D3)
-│   ├── proto/index.ts                 # Dynamic require('baileys/WAProto') bridge (D1)
+│   │   ├── transport.ts               # WsTransport (D3)
+│   │   ├── handshake.ts               # Handshake orchestrator (ClientHello → ServerHello → ClientFinish)
+│   │   ├── keepalive.ts               # Ping/pong keepalive watchdog
+│   │   ├── pairing.ts                 # QR + pairing-code device linking
+│   │   ├── state-machine.ts           # Connection state machine
+│   │   └── circuit-breaker.ts         # Failure-based circuit breaker
+│   ├── proto/
+│   │   ├── index.ts                   # Dynamic require('baileys/WAProto') bridge (D1)
+│   │   └── payload.ts                 # generateLoginNode / generateRegistrationNode
 │   ├── store/
 │   │   ├── interface.ts               # AuthStore + storeToAuthState adapter
 │   │   ├── memory.ts                  # MemoryAuthStore
@@ -71,44 +82,65 @@ D:/nexawhats/
 │   │   └── index.ts                   # Barrel
 │   ├── types/
 │   │   ├── auth.ts                    # AuthenticationCreds, SignalKeyStore, SignalDataTypeMap
-│   │   ├── events.ts
-│   │   ├── jid.ts
-│   │   ├── message.ts
-│   │   ├── socket.ts                  # ClientOptions incl. Logger
+│   │   ├── events.ts                  # NexaWhatsEventMap
+│   │   ├── group.ts                   # GroupMetadataFull, GroupAction, etc.
+│   │   ├── message.ts                 # WAMessage, AnyMessageContent, etc.
+│   │   ├── socket.ts                  # ClientConfig, ConnectionState, etc.
 │   │   ├── errors.ts
 │   │   └── index.ts
-│   ├── queue/                         # Connection state machine + circuit breaker + message queue
-│   ├── middleware/                    # Pluggable pipeline — builtin/logger.ts
+│   ├── queue/                         # Message queue + rate limiter + dead letter
+│   ├── middleware/                     # Pluggable pipeline — builtin/ (anti-ban, lid-resolver, logger)
 │   ├── observability/                 # prom-client metrics + /health endpoint
 │   ├── errors/
 │   ├── utils/
-│   │   ├── crypto.ts                  # hkdf, aesGcm, sha256, Curve.sharedKey, generateSignalPubKey,
-│   │   │                              #   KEY_BUNDLE_TYPE (added D4 prep)
+│   │   ├── auth.ts                    # initAuthCreds (D5/D6)
+│   │   ├── crypto.ts                  # hkdf, aesGcm, sha256, Curve.sharedKey, generateSignalPubKey
 │   │   └── logger.ts                  # pino wrapper
-│   ├── groups/                        # (empty — D6 target)
-│   └── messages/                      # (empty — D6 target)
+│   ├── groups/                        # Group operations (create, leave, metadata, participants, etc.)
+│   │   ├── index.ts                   # makeGroupOperations + extractGroupMetadata
+│   │   └── types.ts                   # Re-exports from types/group.ts
+│   └── messages/                      # Message send + receive pipeline
+│       ├── index.ts                   # Barrel
+│       ├── encode.ts                  # generateWAMessage / generateWAMessageContent (AnyMessageContent → proto)
+│       ├── send.ts                    # MessageSender (queue wrapping)
+│       ├── send-relay.ts              # makeMessageRelay — encrypt, build stanzas, route to devices
+│       ├── receive.ts                 # extractText, getSenderJid, getChatJid, hasMedia, getMediaType
+│       ├── recv.ts                    # decryptMessageNode, decodeMessageNode, cleanMessage
+│       ├── media.ts                   # resolveMediaUpload
+│       └── types.ts                   # Re-exports
 │
 ├── scripts/
-│   ├── generate-noise-fixtures.mjs    # D2 fixture regenerator (needs NODE_PATH to Baileys)
-│   └── capture-signal-fixtures.mjs    # D4 live capture harness (D4 prep, committed 588f304)
+│   ├── generate-noise-fixtures.mjs    # D2 fixture regenerator
+│   ├── capture-signal-fixtures.mjs    # D4 live capture harness
+│   └── smoke-connect.mjs              # D5 handshake-level smoke test
+│
+├── examples/
+│   ├── README.md
+│   ├── basic-bot/index.ts             # Minimal echo bot with FileAuthStore + middleware
+│   ├── multi-account/index.ts         # Multiple WhatsApp numbers from one process
+│   ├── media-download/index.ts        # Media detection in incoming messages
+│   └── group-management/index.ts      # Group event listening
 │
 ├── tests/
 │   ├── unit/
-│   │   ├── binary/jid.test.ts         # 26 tests (D4.4b)
-│   │   ├── signal/
-│   │   │   ├── lid-mapping.test.ts    # 19 tests (D4.4f)
-│   │   │   └── group/
-│   │   │       ├── data-classes.test.ts    # 31 tests (D4.4d)
-│   │   │       ├── message-types.test.ts   # 9 tests (D4.4e) — guarded by haveFixture && haveProto
-│   │   │       └── group-cipher.test.ts    # 5 tests (D4.4e) — guarded
-│   │   ├── socket/ noise.test.ts, transport.test.ts
-│   │   ├── store/     sqlite.test.ts, migrate.test.ts (11 pre-existing failures — unrelated to Track B)
-│   │   └── …
+│   │   ├── binary/ (codec, jid, circuit-breaker, state-machine)
+│   │   ├── signal/ (repository, lid-mapping, group/)
+│   │   ├── socket/ (noise, transport, keepalive, pairing, handshake)
+│   │   ├── store/ (sqlite, file, memory, migrate, serialize)
+│   │   ├── messages/ (encode, recv, media)
+│   │   ├── groups/ (index)
+│   │   ├── proto/ (proto, payload)
+│   │   ├── utils/ (auth, crypto, jid, retry)
+│   │   ├── middleware/ (pipeline)
+│   │   ├── observability/ (metrics, health)
+│   │   ├── errors/ (errors)
+│   │   └── queue/ (rate-limiter, dead-letter)
 │   ├── fixtures/
 │   │   ├── noise/basic.json                       # D2 (committed)
 │   │   ├── signal/*.local.json                    # D4 — 9 live captures (GITIGNORED)
 │   │   └── auth-capture/                          # D4 — live auth state (GITIGNORED)
-│   └── e2e/                           # Live smoke — NOT in CI (ban risk)
+│   └── e2e/                                       # Live smoke — NOT in CI (ban risk)
+│       └── live-smoke.ts                          # Full-pipeline e2e test (D6)
 │
 └── .gitignore                         # excludes tests/fixtures/auth-capture/ + *.local.json
 ```
@@ -129,18 +161,20 @@ D:/nexawhats/
 | D4.4d — Group data classes (6 files, 207 LoC) | ✅ Shipped | 804a94c |
 | D4.4e — message types + ciphers (~250 LoC) | ✅ Shipped | 804a94c |
 | D4.4f — `LIDMappingStore` | ✅ Shipped | 804a94c |
-| **D4.4g — `libsignal.ts` orchestrator (~341 LoC)** | ⏭️ Next | — |
-| D4.5 — fixture replay tests | ⏭️ After D4.4g | — |
-| D5 — wire `client.connect()` end-to-end | ⏸️ After D4 | — |
-| D6 — messages + groups (~2,200 LoC) | ⏸️ After D5 | — |
+| D4.4g — `libsignal.ts` orchestrator (465 LoC) | ✅ Shipped | (uncommitted) |
+| D4.5 — fixture replay tests (`repository.test.ts`, 7 tests) | ✅ Shipped | (uncommitted) |
+| D5 — wire `client.connect()` end-to-end | ✅ Shipped | (uncommitted) |
+| D6 — messages + groups (~2,200 LoC) | ✅ Shipped | (uncommitted) |
 
-**Current gate state (after D4.4f):**
+**Current gate state:**
 - `npx tsc --noEmit` → 0 errors
+- `npx vitest run` → **502 passing**, 4 skipped, 0 failures (36 test files)
 - `npx vitest run tests/unit/signal/` → 64/64 passing
-- `npx biome check src/signal/ tests/unit/signal/` → clean
-- Full suite: 352 passing, 4 skipped, **11 pre-existing store failures** in
-  `tests/unit/store/sqlite.test.ts` + `migrate.test.ts` — not caused by
-  Track B, verified via `git stash` baseline.
+- `npx biome check src/ tests/` → clean
+
+**Remaining for 0.2.0 release gate:**
+- `tests/e2e/live-smoke.ts` — 1-hour live smoke against real WhatsApp number
+- `examples/basic-bot/index.ts` — echo bot verified against live server
 
 ---
 
@@ -150,10 +184,8 @@ D:/nexawhats/
 Baileys wraps writes in `keys.transaction(work, key)` for batching +
 retry. Our `SignalKeyStore` interface doesn't. Workaround: issue a
 single atomic `setKeys({ 'type': { ... } })` call with every mutation
-batched in — SQLite WAL gives the same atomicity. `lid-mapping.ts` is
-the first port applying this adapter; `libsignal.ts` (D4.4g) will need
-the same treatment for `decryptGroupMessage` /
-`processSenderKeyDistributionMessage` / `decryptMessage`.
+batched in — SQLite WAL gives the same atomicity. Applied in both
+`lid-mapping.ts` and `libsignal.ts`.
 
 ### Fixture schema differs from the plan
 Our `capture-signal-fixtures.mjs` records
@@ -187,12 +219,6 @@ PN JIDs like `923315244441:3@s.whatsapp.net` decode to
 `{ user: '923315244441', device: 3 }`. The LID mapping keys by `user`
 only (device-independent); the device is re-attached on output.
 Never key storage by a device-suffixed string.
-
-### Pre-existing store test failures
-11 failures in `tests/unit/store/sqlite.test.ts` +
-`tests/unit/store/migrate.test.ts` predate Track B. `git stash`
-baseline confirms. Do NOT fix them as part of Track B work — track as
-separate tech debt.
 
 ---
 
@@ -231,51 +257,6 @@ traffic from `923315244441`):** 9 files on disk at
 
 ---
 
-## Next Session Checkpoint — D4.4g
-
-**Source of truth:**
-`D:/Digital Fte/body/my-bot/node_modules/@whiskeysockets/baileys/lib/Signal/libsignal.js`
-(341 LoC)
-
-**Port target:** `src/signal/libsignal.ts`
-
-**Exports:**
-- `makeLibSignalRepository(auth, logger, pnToLIDFunc?)` returning
-  `SignalRepository` with:
-  - `decryptGroupMessage({ group, authorJid, msg })`
-  - `processSenderKeyDistributionMessage({ item, authorJid })`
-  - `decryptMessage({ jid, type, ciphertext })`
-  - `encryptMessage({ jid, data })`
-  - `encryptGroupMessage({ group, meId, data })`
-  - `injectE2ESession({ jid, session })`
-  - `jidToSignalProtocolAddress(jid)`
-
-**Key adapters needed:**
-- Drop `parsedKeys.transaction(work, key)` wrapping — call `work()`
-  directly (SQLite WAL handles atomicity). Same approach as
-  `lid-mapping.ts`.
-- `signalStorage(auth, lidMapping)` — wraps our `SignalKeyStore` into
-  the shape libsignal-node expects (`loadSession`, `storeSession`,
-  `loadPreKey`, `storePreKey`, `removePreKey`, `loadSignedPreKey`,
-  `loadIdentityKey`, `storeSenderKey`, `loadSenderKey`, etc.)
-- `migratedSessionCache` — LRU, 3-day TTL, same config as `LIDMappingStore`
-- `jidToSignalProtocolAddress(jid)` — uses `jidDecode` + handles LID
-  device transfer via `LIDMappingStore.getPNForLID()`
-
-**Gates:** tsc 0 + biome clean + `npx vitest run tests/unit/signal/`
-all green. Unit tests at this stage can be minimal (structural +
-exported surface) — the real verification comes in D4.5 fixture
-replay.
-
-**D4.5 after D4.4g:** `tests/unit/signal/repository.test.ts` — 4 test
-groups: pkmsg, msg (×5), senderkey, group decrypt. Hydrate
-`AuthStore` from each fixture's `authSnapshot`, call the matching
-method, assert `output.plaintext` matches byte-for-byte. If any
-fixture fails to round-trip, STOP — that's silent-decrypt bug
-territory.
-
----
-
 ## Verification Commands
 
 ```bash
@@ -287,7 +268,7 @@ npx tsc --noEmit
 # Unit tests (all)
 npx vitest run
 
-# Unit tests (signal only — D4.4d-f scope)
+# Unit tests (signal only)
 npx vitest run tests/unit/signal/
 
 # Lint + format check
