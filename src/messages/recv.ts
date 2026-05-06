@@ -27,9 +27,9 @@ import {
 import { proto } from '../proto/index.js';
 import type { SignalRepository } from '../signal/libsignal.js';
 import type { WAMessage, WAMessageContent } from '../types/message.js';
+import { aesDecryptGCM, hmacSign } from '../utils/crypto.js';
 import { getContentType, normalizeMessageContent } from './encode.js';
 import { downloadContentFromMessage } from './media.js';
-import { aesDecryptGCM, hmacSign } from '../utils/crypto.js';
 
 const inflatePromise = promisify(inflate);
 
@@ -747,7 +747,10 @@ export function decryptPollVote(
   const aad = toBinary(`${pollMsgId} ${voterJid}`);
 
   const decrypted = aesDecryptGCM(encPayload, decKey, encIv, aad);
-  const Proto = proto as Record<string, Record<string, { decode(b: Uint8Array): Record<string, unknown> }>>;
+  const Proto = proto as Record<
+    string,
+    Record<string, { decode(b: Uint8Array): Record<string, unknown> }>
+  >;
   return Proto.Message.PollVoteMessage.decode(decrypted);
 }
 
@@ -776,7 +779,10 @@ export function decryptEventResponse(
   const aad = toBinary(`${eventMsgId} ${responderJid}`);
 
   const decrypted = aesDecryptGCM(encPayload, decKey, encIv, aad);
-  const Proto = proto as Record<string, Record<string, { decode(b: Uint8Array): Record<string, unknown> }>>;
+  const Proto = proto as Record<
+    string,
+    Record<string, { decode(b: Uint8Array): Record<string, unknown> }>
+  >;
   return Proto.Message.EventResponseMessage.decode(decrypted);
 }
 
@@ -787,7 +793,9 @@ export function decryptEventResponse(
 export function extractEncryptedPollVote(
   content: Record<string, unknown> | null | undefined,
 ): { encPayload: Uint8Array; encIv: Uint8Array } | undefined {
-  const pollUpdate = (content as Record<string, unknown> | undefined)?.pollUpdateMessage as Record<string, unknown> | undefined;
+  const pollUpdate = (content as Record<string, unknown> | undefined)?.pollUpdateMessage as
+    | Record<string, unknown>
+    | undefined;
   const vote = pollUpdate?.vote as { encPayload?: Uint8Array; encIv?: Uint8Array } | undefined;
   if (vote?.encPayload && vote?.encIv) {
     return { encPayload: vote.encPayload, encIv: vote.encIv };
@@ -800,9 +808,15 @@ export function extractEncryptedPollVote(
  */
 export function extractEncryptedEventResponse(
   content: Record<string, unknown> | null | undefined,
-): { encPayload: Uint8Array; encIv: Uint8Array; eventCreationMessageKey?: Record<string, unknown> } | undefined {
+):
+  | { encPayload: Uint8Array; encIv: Uint8Array; eventCreationMessageKey?: Record<string, unknown> }
+  | undefined {
   const enc = (content as Record<string, unknown> | undefined)?.encEventResponseMessage as
-    | { encPayload?: Uint8Array; encIv?: Uint8Array; eventCreationMessageKey?: Record<string, unknown> }
+    | {
+        encPayload?: Uint8Array;
+        encIv?: Uint8Array;
+        eventCreationMessageKey?: Record<string, unknown>;
+      }
     | undefined;
   if (enc?.encPayload && enc?.encIv) {
     return {

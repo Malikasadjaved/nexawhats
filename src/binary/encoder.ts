@@ -64,11 +64,7 @@ function encodeBinaryNodeInner(
   };
 
   const pushInt20 = (value: number): void => {
-    pushBytes([
-      (value >> 16) & 0x0f,
-      (value >> 8) & 0xff,
-      value & 0xff,
-    ]);
+    pushBytes([(value >> 16) & 0x0f, (value >> 8) & 0xff, value & 0xff]);
   };
 
   const writeByteLength = (length: number): void => {
@@ -236,12 +232,12 @@ function encodeBinaryNodeInner(
   }
 
   const validAttributes = Object.keys(attrs || {}).filter(
-    (k) => typeof (attrs as Record<string, string>)[k] !== 'undefined' && (attrs as Record<string, string>)[k] !== null,
+    (k) =>
+      typeof (attrs as Record<string, string>)[k] !== 'undefined' &&
+      (attrs as Record<string, string>)[k] !== null,
   );
 
-  writeListStart(
-    2 * validAttributes.length + 1 + (typeof content !== 'undefined' ? 1 : 0),
-  );
+  writeListStart(2 * validAttributes.length + 1 + (typeof content !== 'undefined' ? 1 : 0));
   writeString(tag);
 
   for (const key of validAttributes) {
@@ -272,9 +268,7 @@ function encodeBinaryNodeInner(
   } else if (typeof content === 'undefined') {
     // do nothing
   } else {
-    throw new Error(
-      `invalid children for header "${tag}": ${content} (${typeof content})`,
-    );
+    throw new Error(`invalid children for header "${tag}": ${content} (${typeof content})`);
   }
 
   return buffer;

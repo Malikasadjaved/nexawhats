@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { encodeBinaryNode } from '../../../src/binary/encoder.js';
 import { decodeDecompressedBinaryNode } from '../../../src/binary/decoder.js';
+import { encodeBinaryNode } from '../../../src/binary/encoder.js';
 import {
   findChildNode,
   findChildNodes,

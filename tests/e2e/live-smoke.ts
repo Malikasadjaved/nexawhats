@@ -1,38 +1,6 @@
-/**
- * E2E live smoke test — full-pipeline verification against a real
- * WhatsApp number.
- *
- * Exercises: connect → send ping → receive messages → verify echo →
- * clean disconnect. Runs for a configurable duration (default 1 hour).
- *
- * ## Usage
- *
- * ```bash
- * npx tsx tests/e2e/live-smoke.ts [path-to-creds.json]
- * ```
- *
- * Credentials file: a Baileys-compatible `authState.json` or a NexaWhats
- * auth-capture `creds.json`. Must contain `noiseKey`, `signedIdentityKey`,
- * `signedPreKey`, `registrationId`, `advSecretKey`, and `me.id`.
- *
- * If no path is given, searches:
- *   1. `tests/fixtures/auth-capture/creds.json`
- *   2. `./auth-creds.json`
- *
- * ## Environment variables
- *
- *   SMOKE_DURATION_S     Seconds to stay connected (default 3600 = 1 hour)
- *   SMOKE_TARGET_JID     If set, send a test ping to this JID after connecting
- *   SMOKE_ECHO_CHECK     If "1", expects the remote to echo back the ping
- *                        (requires a bot running on the target number)
- *   SMOKE_QUICK          If "1", overrides duration to 60 s (connectivity-only)
- */
-
-import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { AuthenticationCreds } from '../../src/types/auth.js';
-import type { WAMessage } from '../../src/types/message.js';
 
 const { FileAuthStore, createClient } = await import('../../src/index.js');
 
@@ -101,7 +69,8 @@ function reviveBuffers(obj: unknown): unknown {
     'data' in obj
   ) {
     const d = (obj as { data: string | number[] }).data;
-    return Buffer.from(typeof d === 'string' ? d : Buffer.from(d).toString('base64'),
+    return Buffer.from(
+      typeof d === 'string' ? d : Buffer.from(d).toString('base64'),
       typeof d === 'string' ? 'base64' : undefined,
     );
   }
@@ -343,7 +312,9 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-  log(`Running for ${effectiveDuration}s (${(effectiveDuration / 60).toFixed(0)}m), Ctrl+C to stop`);
+  log(
+    `Running for ${effectiveDuration}s (${(effectiveDuration / 60).toFixed(0)}m), Ctrl+C to stop`,
+  );
 
   await donePromise;
 

@@ -112,7 +112,10 @@ D:/nexawhats/
 ├── scripts/
 │   ├── generate-noise-fixtures.mjs    # D2 fixture regenerator
 │   ├── capture-signal-fixtures.mjs    # D4 live capture harness
-│   └── smoke-connect.mjs              # D5 handshake-level smoke test
+│   ├── smoke-connect.mjs              # D5 handshake-level smoke test
+│   └── re-auth.ts                     # Fresh pairing tool (QR + pairing code)
+│
+├── auth-smoke/                        # Session store for re-auth script (gitignored)
 │
 ├── examples/
 │   ├── README.md
@@ -219,6 +222,53 @@ PN JIDs like `923315244441:3@s.whatsapp.net` decode to
 `{ user: '923315244441', device: 3 }`. The LID mapping keys by `user`
 only (device-independent); the device is re-attached on output.
 Never key storage by a device-suffixed string.
+
+### Pre-key bundle IQ uses `skey`, NOT `signed_pre_key`
+The WhatsApp XMPP protocol expects the signed pre-key element as
+`<skey>` in the pre-key upload IQ. Using `signed_pre_key` causes the
+server to silently ignore the entire IQ → 30s timeout. Baileys'
+`xmppSignedPreKey` (signal.js:41) uses tag `skey`. Also matches the
+registration payload's `eSkeyId`/`eSkeyVal`/`eSkeySig` naming.
+
+### `connect()` MUST wait for login outcome before returning
+`connectOnce()` returns immediately after the Noise handshake —
+the server's login response (success/failure/pair-success) arrives
+later via the `onFrame` callback. The connect loop uses a
+`loginOutcome` promise that the `onFrame` handler resolves when it
+sees `success`, `failure`, or `pair-success`. The post-connectOnce
+code awaits this promise and either returns (success), continues the
+loop (pair-success → reconnect for login), or retries (failure).
+
+### Pairing flow: pair-success → stream error → reconnect → login
+When pairing via QR or pairing code, the server:
+1. Sends `pair-device` IQs (QR cycling)
+2. On successful pair: sends `pair-success` IQ
+3. Then sends `stream:error` to force a reconnect
+4. On reconnect: sends `success` (login, now that `creds.registered` is true)
+The `pairSuccessReceived` flag skips the "stream error" warning when set.
+
+### `phoneNumber` config triggers new pairing code unless guarded
+In `client.ts`, if `!creds.pairingCode && !creds.registered && this.config.phoneNumber`,
+a fresh pairing code is generated. Without the `!creds.registered` guard,
+an already-paired session with `phoneNumber` set would regenerate a
+pairing code and overwrite `creds.me`, causing a 401 on the next login
+attempt. The re-auth script sets `phoneNumber`; the echo bot should
+NOT set it when reusing a saved session.
+
+### `FileAuthStore` paths are relative to CWD, not the script
+`new FileAuthStore('./auth')` resolves relative to `process.cwd()`.
+When running `npx tsx examples/basic-bot/index.ts` from the repo root,
+`./auth` resolves to `D:/nexawhats/auth/`, not `examples/basic-bot/auth/`.
+The re-auth script uses `./auth-smoke` consistently.
+Always verify the auth directory exists after startup.
+
+### Use `scripts/re-auth.ts` for fresh pairing, not the echo bot
+`scripts/re-auth.ts` has a battle-tested pairing flow:
+- `npx tsx scripts/re-auth.ts <phone>` — pairing code mode (8-char code)
+- `npx tsx scripts/re-auth.ts <phone> --qr` — QR code mode (scan URL)
+- Saves to `./auth-smoke/` and `tests/fixtures/auth-capture/creds.json`
+- Handles disconnect/reconnect after pairing automatically
+- 90s timeout, exits cleanly after successful registration
 
 ---
 

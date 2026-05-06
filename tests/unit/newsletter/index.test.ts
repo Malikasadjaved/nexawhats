@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getBinaryNodeChild, S_WHATSAPP_NET } from '../../../src/binary/index.js';
+import { S_WHATSAPP_NET, getBinaryNodeChild } from '../../../src/binary/index.js';
 import type { BinaryNode } from '../../../src/binary/index.js';
 import { makeNewsletterSocket } from '../../../src/newsletter/index.js';
 import type { NewsletterSocket } from '../../../src/newsletter/index.js';
@@ -64,7 +64,11 @@ function createMockQuery(response?: BinaryNode, content?: string) {
 function createSocket(
   response?: BinaryNode,
   content?: string,
-): { socket: NewsletterSocket; getResponses: () => BinaryNode[]; getLastQuery: () => BinaryNode | undefined } {
+): {
+  socket: NewsletterSocket;
+  getResponses: () => BinaryNode[];
+  getLastQuery: () => BinaryNode | undefined;
+} {
   const mock = createMockQuery(response, content);
   const socket = makeNewsletterSocket({ query: mock.query, sendNode: async () => {} });
   return { socket, ...mock };
@@ -164,9 +168,9 @@ describe('newsletterMetadata', () => {
   it('throws when the response lacks the expected data path', async () => {
     const content = JSON.stringify({ data: {} });
     const { socket } = createSocket(undefined, content);
-    await expect(
-      socket.newsletterMetadata('invite', 'some-invite-code'),
-    ).rejects.toThrow('unexpected response structure');
+    await expect(socket.newsletterMetadata('invite', 'some-invite-code')).rejects.toThrow(
+      'unexpected response structure',
+    );
   });
 });
 

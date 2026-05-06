@@ -1,10 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type {
-  AuthenticationCreds,
-  SignalDataSet,
-  SignalDataTypeMap,
-} from '../types/auth.js';
+import type { AuthenticationCreds, SignalDataSet, SignalDataTypeMap } from '../types/auth.js';
 import type { AuthStore } from './interface.js';
 
 /**
@@ -23,12 +19,7 @@ export interface MigrationResult {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function baileysReviver(_key: string, value: any): any {
-  if (
-    value &&
-    typeof value === 'object' &&
-    value.type === 'Buffer' &&
-    Array.isArray(value.data)
-  ) {
+  if (value && typeof value === 'object' && value.type === 'Buffer' && Array.isArray(value.data)) {
     return Buffer.from(value.data);
   }
   // Our own serializer shape — tolerate files already in NexaWhats format.
@@ -49,9 +40,7 @@ function readJsonBaileys(path: string): unknown {
  * `session-923124166950.1@s.whatsapp.net.json` into (type, id).
  * Returns null for files we don't recognize (e.g. creds.json).
  */
-function parseBaileysFilename(
-  name: string,
-): { type: keyof SignalDataTypeMap; id: string } | null {
+function parseBaileysFilename(name: string): { type: keyof SignalDataTypeMap; id: string } | null {
   if (!name.endsWith('.json')) return null;
   if (name === 'creds.json') return null;
 

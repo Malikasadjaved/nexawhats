@@ -68,10 +68,7 @@ describe('migrateFromBaileys', () => {
       public: Buffer.from([30]),
       private: Buffer.from([40]),
     });
-    writeBaileysJson(
-      join(src, 'session-923124166950.1@s.whatsapp.net.json'),
-      Buffer.from([99]),
-    );
+    writeBaileysJson(join(src, 'session-923124166950.1@s.whatsapp.net.json'), Buffer.from([99]));
 
     const target = new MemoryAuthStore();
     const result = await migrateFromBaileys(src, target);
@@ -82,9 +79,7 @@ describe('migrateFromBaileys', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(((prek['1'] as any).public as Buffer).equals(Buffer.from([10]))).toBe(true);
 
-    const sess = await target.getKeys('session', [
-      '923124166950.1@s.whatsapp.net',
-    ]);
+    const sess = await target.getKeys('session', ['923124166950.1@s.whatsapp.net']);
     expect(Object.keys(sess)).toHaveLength(1);
   });
 

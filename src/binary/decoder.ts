@@ -9,11 +9,11 @@
 
 import { promisify } from 'node:util';
 import { inflate } from 'node:zlib';
-import { jidEncode } from '../utils/jid.js';
 import { WAJIDDomains } from '../types/jid.js';
+import { jidEncode } from '../utils/jid.js';
 import * as constants from './constants.js';
-import type { BinaryNode } from './types.js';
 import type { BinaryNodeCodingOptions } from './encoder.js';
+import type { BinaryNode } from './types.js';
 
 const inflatePromise = promisify(inflate);
 
@@ -86,9 +86,7 @@ export function decodeDecompressedBinaryNode(
 
   const unpackHex = (value: number): number => {
     if (value >= 0 && value < 16) {
-      return value < 10
-        ? '0'.charCodeAt(0) + value
-        : 'A'.charCodeAt(0) + value - 10;
+      return value < 10 ? '0'.charCodeAt(0) + value : 'A'.charCodeAt(0) + value - 10;
     }
     throw new Error('invalid hex: ' + value);
   };
@@ -134,11 +132,7 @@ export function decodeDecompressedBinaryNode(
   };
 
   const isListTag = (tag: number): boolean => {
-    return (
-      tag === TAGS.LIST_EMPTY ||
-      tag === TAGS.LIST_8 ||
-      tag === TAGS.LIST_16
-    );
+    return tag === TAGS.LIST_EMPTY || tag === TAGS.LIST_8 || tag === TAGS.LIST_16;
   };
 
   const readListSize = (tag: number): number => {
@@ -313,10 +307,7 @@ export async function decodeBinaryNodes(data: Buffer): Promise<BinaryNode[]> {
   let offset = 0;
 
   while (offset < data.length) {
-    const view = new DataView(
-      data.buffer,
-      data.byteOffset + offset,
-    );
+    const view = new DataView(data.buffer, data.byteOffset + offset);
     const length = view.getUint32(0);
     offset += 4;
 

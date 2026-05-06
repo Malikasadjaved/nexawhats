@@ -72,8 +72,13 @@ export async function performHandshake({
   logger.trace('awaiting ServerHello');
   const serverFrame = await io.waitForHandshakeReply(timeoutMs);
 
+  // The raw WebSocket frame includes a 3-byte noise length prefix
+  // (big-endian uint24 payload length at bytes 0-2). Strip it before
+  // protobuf decoding — same as noise.decodeFrame's subarray(3, size+3).
+  const serverPayload = serverFrame.subarray(3);
+
   // ServerHello is a HandshakeMessage; decode it.
-  const handshake = HandshakeMessage.decode(serverFrame) as NoiseHandshakeMessage;
+  const handshake = HandshakeMessage.decode(serverPayload) as NoiseHandshakeMessage;
   if (!handshake.serverHello) {
     throw new Error('handshake reply missing serverHello');
   }

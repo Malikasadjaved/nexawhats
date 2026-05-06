@@ -161,7 +161,7 @@ describe('performHandshake', () => {
 
     await performHandshake(buildOptions({ io: io as unknown as HandshakeIO }));
 
-    expect(mockHandshakeDecode).toHaveBeenCalledWith(serverFrame);
+    expect(mockHandshakeDecode).toHaveBeenCalledWith(serverFrame.subarray(3));
   });
 
   it('throws when the decoded handshake lacks serverHello', async () => {

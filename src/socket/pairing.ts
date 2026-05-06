@@ -5,11 +5,14 @@
  * Ported from Baileys' socket.js `requestPairingCode` +
  * `configureSuccessfulPairing` (Utils/validate-connection.js).
  */
+import { createRequire } from 'node:module';
 import type { BinaryNode } from '../binary/index.js';
 import { S_WHATSAPP_NET, jidEncode } from '../binary/jid.js';
 import { proto } from '../proto/index.js';
 import type { AuthenticationCreds } from '../types/auth.js';
 import { aesEncryptCTR, generateRandomBytes, hmacSign } from '../utils/crypto.js';
+
+const _require = createRequire(import.meta.url);
 
 // ── ADV (Account/Device Verification) signature prefixes ────────────
 const WA_ADV_ACCOUNT_SIG_PREFIX = Buffer.from([6, 0]);
@@ -271,9 +274,7 @@ export function processPairSuccess(
     Buffer.from(creds.signedIdentityKey.public),
   ]);
 
-  // Use libsignal for Ed25519 signature verification
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const curve = require('libsignal/src/curve.js') as {
+  const curve = _require('libsignal/src/curve.js') as {
     verifySignature(pub: Uint8Array, msg: Uint8Array, sig: Uint8Array): void;
   };
   try {
@@ -294,8 +295,7 @@ export function processPairSuccess(
     accountSignatureKey as Uint8Array,
   ]);
 
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const signCurve = require('libsignal/src/curve.js') as {
+  const signCurve = _require('libsignal/src/curve.js') as {
     calculateSignature(priv: Uint8Array, msg: Uint8Array): Uint8Array;
   };
   account.deviceSignature = Buffer.from(

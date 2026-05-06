@@ -64,9 +64,7 @@ describe('FileAuthStore', () => {
     const loaded = await store.loadState();
     expect(loaded).not.toBeNull();
     expect(loaded!.creds.registrationId).toBe(77);
-    expect((loaded!.creds.noiseKey.public as Buffer).equals(Buffer.from([1]))).toBe(
-      true,
-    );
+    expect((loaded!.creds.noiseKey.public as Buffer).equals(Buffer.from([1]))).toBe(true);
     expect(loaded!.creds.signedPreKey.keyId).toBe(42);
   });
 

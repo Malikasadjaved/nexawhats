@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { encodeBinaryNode } from '../../../src/binary/encoder.js';
+import { TAGS, TOKEN_MAP } from '../../../src/binary/constants.js';
 import {
   decodeDecompressedBinaryNode,
   decompressingIfRequired,
 } from '../../../src/binary/decoder.js';
+import { encodeBinaryNode } from '../../../src/binary/encoder.js';
 import {
   type BinaryNode,
+  assertNodeErrorFree,
+  binaryNodeToString,
   findChildNode,
   findChildNodes,
   getAllBinaryNodeChildren,
@@ -15,11 +18,8 @@ import {
   getBinaryNodeChildUInt,
   getTextContent,
   hasChildNodes,
-  assertNodeErrorFree,
   reduceBinaryNodeToDictionary,
-  binaryNodeToString,
 } from '../../../src/binary/types.js';
-import { TAGS, TOKEN_MAP } from '../../../src/binary/constants.js';
 
 /**
  * Helper: encode a node, strip the prefix byte, then decode.
@@ -341,9 +341,7 @@ describe('BinaryNode helpers', () => {
     const node: BinaryNode = {
       tag: 'root',
       attrs: {},
-      content: [
-        { tag: 'count', attrs: {}, content: Buffer.from([0x00, 0x05]) },
-      ],
+      content: [{ tag: 'count', attrs: {}, content: Buffer.from([0x00, 0x05]) }],
     };
     expect(getBinaryNodeChildUInt(node, 'count', 2)).toBe(5);
   });
@@ -356,9 +354,7 @@ describe('BinaryNode helpers', () => {
     const node: BinaryNode = {
       tag: 'iq',
       attrs: {},
-      content: [
-        { tag: 'error', attrs: { code: '401', text: 'Unauthorized' } },
-      ],
+      content: [{ tag: 'error', attrs: { code: '401', text: 'Unauthorized' } }],
     };
     expect(() => assertNodeErrorFree(node)).toThrow('Unauthorized');
   });

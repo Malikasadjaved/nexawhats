@@ -17,6 +17,7 @@
  * Subsequent runs reuse the saved session under `./auth/`.
  */
 
+import pino from 'pino';
 import {
   FileAuthStore,
   antiBan,
@@ -29,10 +30,14 @@ async function main(): Promise<void> {
   const store = new FileAuthStore('./auth');
   const state = await store.loadState();
 
+  const logger = pino({ level: 'trace' });
+
   const client = createClient({
     auth: state ?? { creds: {}, keys: store },
+    phoneNumber: '923367400783',
     queue: { messagesPerMinute: 20, humanLikeTiming: true },
-    metrics: { prometheus: true, port: 9100 },
+    metrics: { prometheus: true, port: 9101 },
+    logger,
   });
 
   // ── Middleware pipeline ────────────────────────────────────────────
@@ -79,7 +84,7 @@ async function main(): Promise<void> {
           `uptime: ${uptime}s`,
           `heap: ${(mem.heapUsed / 1024 / 1024).toFixed(1)} MB`,
           `rss: ${(mem.rss / 1024 / 1024).toFixed(1)} MB`,
-          `health: http://localhost:9100/health`,
+          `health: http://localhost:9101/health`,
         ].join('\n'),
       });
       return;
@@ -115,9 +120,29 @@ async function main(): Promise<void> {
     });
   });
 
-  client.on('messages.upsert', ({ messages }) => {
-    // The messageLogger middleware already logs these; this handler
-    // is a no-op by default — add custom logic here if needed.
+  client.on('messages.upsert', ({ messages, type }) => {
+    for (const msg of messages) {
+      const content = msg.message as Record<string, unknown> | undefined;
+      const keys = content ? Object.keys(content).filter(k => k !== 'senderKeyDistributionMessage') : [];
+      const hasConversation = !!content?.conversation;
+      const hasExtendedText = !!(content?.extendedTextMessage as Record<string, unknown>)?.text;
+      const hasProtocol = !!content?.protocolMessage;
+      const hasReaction = !!content?.reactionMessage;
+      const msgType = content
+        ? keys.join(',')
+        : 'NO-CONTENT';
+      console.log(
+        `[MSG-IN] fromMe=${msg.key.fromMe} remoteJid=${msg.key.remoteJid} ` +
+        `id=${msg.key.id} type=${msgType} ` +
+        `conv=${hasConversation} extText=${hasExtendedText} proto=${hasProtocol} react=${hasReaction} ` +
+        `realMsgCheck=${keys.length > 0 && !hasProtocol && !hasReaction ? 'would-pass' : 'BLOCKED'}`,
+      );
+      if (content?.conversation) {
+        console.log(`  → text: "${content.conversation}"`);
+      } else if ((content?.extendedTextMessage as Record<string, unknown>)?.text) {
+        console.log(`  → extText: "${(content.extendedTextMessage as Record<string, unknown>).text}"`);
+      }
+    }
   });
 
   // ── Lifecycle ──────────────────────────────────────────────────────
@@ -139,8 +164,8 @@ async function main(): Promise<void> {
   await client.connect();
 
   console.log('bot online');
-  console.log('health endpoint: http://localhost:9100/health');
-  console.log('metrics endpoint: http://localhost:9100/metrics');
+  console.log('health endpoint: http://localhost:9101/health');
+  console.log('metrics endpoint: http://localhost:9101/metrics');
 }
 
 main().catch((err) => {

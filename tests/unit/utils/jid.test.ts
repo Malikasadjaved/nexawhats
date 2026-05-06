@@ -1,25 +1,25 @@
 import { describe, expect, it } from 'vitest';
+import { WAJIDDomains } from '../../../src/types/jid.js';
 import {
   areJidsSameUser,
+  getServerFromDomainType,
+  isHostedLidUser,
+  isHostedPnUser,
+  isJidBot,
   isJidBroadcast,
   isJidGroup,
+  isJidMetaAI,
   isJidNewsletter,
+  isJidStatusBroadcast,
   isJidUser,
   isLidUser,
   isPnUser,
-  isJidMetaAI,
-  isJidBot,
-  isJidStatusBroadcast,
-  isHostedPnUser,
-  isHostedLidUser,
   jidDecode,
   jidEncode,
   jidNormalizedUser,
   phoneFromJid,
   transferDevice,
-  getServerFromDomainType,
 } from '../../../src/utils/jid.js';
-import { WAJIDDomains } from '../../../src/types/jid.js';
 
 describe('jidEncode', () => {
   it('should encode a basic user JID', () => {
@@ -130,9 +130,7 @@ describe('jidNormalizedUser', () => {
   });
 
   it('should strip device from JID', () => {
-    expect(jidNormalizedUser('923124166950:1@s.whatsapp.net')).toBe(
-      '923124166950@s.whatsapp.net',
-    );
+    expect(jidNormalizedUser('923124166950:1@s.whatsapp.net')).toBe('923124166950@s.whatsapp.net');
   });
 
   it('should keep group JIDs as is', () => {
@@ -229,27 +227,19 @@ describe('phoneFromJid', () => {
 
 describe('areJidsSameUser', () => {
   it('should match same user on different servers', () => {
-    expect(
-      areJidsSameUser('923124166950@s.whatsapp.net', '923124166950@c.us'),
-    ).toBe(true);
+    expect(areJidsSameUser('923124166950@s.whatsapp.net', '923124166950@c.us')).toBe(true);
   });
 
   it('should match same user with different devices', () => {
-    expect(
-      areJidsSameUser(
-        '923124166950@s.whatsapp.net',
-        '923124166950:1@s.whatsapp.net',
-      ),
-    ).toBe(true);
+    expect(areJidsSameUser('923124166950@s.whatsapp.net', '923124166950:1@s.whatsapp.net')).toBe(
+      true,
+    );
   });
 
   it('should not match different users', () => {
-    expect(
-      areJidsSameUser(
-        '923124166950@s.whatsapp.net',
-        '923315244441@s.whatsapp.net',
-      ),
-    ).toBe(false);
+    expect(areJidsSameUser('923124166950@s.whatsapp.net', '923315244441@s.whatsapp.net')).toBe(
+      false,
+    );
   });
 
   it('should handle null inputs', () => {
@@ -259,18 +249,12 @@ describe('areJidsSameUser', () => {
 
 describe('transferDevice', () => {
   it('should transfer device from one JID to another', () => {
-    const result = transferDevice(
-      '923124166950:3@s.whatsapp.net',
-      '923315244441@s.whatsapp.net',
-    );
+    const result = transferDevice('923124166950:3@s.whatsapp.net', '923315244441@s.whatsapp.net');
     expect(result).toBe('923315244441:3@s.whatsapp.net');
   });
 
   it('should default device to 0 when source has none', () => {
-    const result = transferDevice(
-      '923124166950@s.whatsapp.net',
-      '923315244441@s.whatsapp.net',
-    );
+    const result = transferDevice('923124166950@s.whatsapp.net', '923315244441@s.whatsapp.net');
     // device 0 is falsy so jidEncode won't add :0
     expect(result).toBe('923315244441@s.whatsapp.net');
   });

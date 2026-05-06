@@ -1,21 +1,19 @@
+import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { BinaryNode } from '../../../src/binary/index.js';
-import { randomBytes } from 'node:crypto';
 import {
   cleanMessage,
   decodeMessageNode,
-  decryptPollVote,
-  decryptEventResponse,
   extractAddressingContext,
-  extractEncryptedPollVote,
   extractEncryptedEventResponse,
+  extractEncryptedPollVote,
   getChatId,
   getHistoryMsg,
   isRealMessage,
   processHistoryMessage,
 } from '../../../src/messages/recv.js';
-import { aesEncryptGCM, hmacSign } from '../../../src/utils/crypto.js';
 import type { WAMessage, WAMessageContent } from '../../../src/types/message.js';
+import { aesEncryptGCM, hmacSign } from '../../../src/utils/crypto.js';
 
 // ── extractAddressingContext ────────────────────────────────────────────
 

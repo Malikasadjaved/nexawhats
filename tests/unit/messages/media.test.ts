@@ -286,9 +286,9 @@ describe('getAudioDuration', () => {
       const duration = await getAudioDuration(
         Buffer.from(
           'T2dnUw' + // OggS magic (base64 of OggS is T2dnUw==)
-          'AAAAA' +
-          'AAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
-          'AAAA',
+            'AAAAA' +
+            'AAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+            'AAAA',
           'base64',
         ),
       );
@@ -308,8 +308,8 @@ describe('generateThumbnail', () => {
     const { generateThumbnail } = await import('../../../src/messages/media.js');
 
     // Neither sharp nor jimp is installed — should throw with a clear message
-    await expect(
-      generateThumbnail('nonexistent.jpg', 'image'),
-    ).rejects.toThrow('No image processing library available');
+    await expect(generateThumbnail('nonexistent.jpg', 'image')).rejects.toThrow(
+      'No image processing library available',
+    );
   });
 });

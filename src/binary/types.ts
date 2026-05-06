@@ -14,9 +14,7 @@ export interface BinaryNode {
 // ---------- Node helpers ----------
 
 /** Helper to check if a BinaryNode has child nodes */
-export function hasChildNodes(
-  node: BinaryNode,
-): node is BinaryNode & { content: BinaryNode[] } {
+export function hasChildNodes(node: BinaryNode): node is BinaryNode & { content: BinaryNode[] } {
   return Array.isArray(node.content);
 }
 
@@ -40,10 +38,7 @@ export function getBinaryContent(node: BinaryNode): Uint8Array | undefined {
 }
 
 /** Find a child node by tag */
-export function findChildNode(
-  node: BinaryNode,
-  tag: string,
-): BinaryNode | undefined {
+export function findChildNode(node: BinaryNode, tag: string): BinaryNode | undefined {
   if (!Array.isArray(node?.content)) return undefined;
   return node.content.find((child) => child.tag === tag);
 }
@@ -81,10 +76,7 @@ export function getBinaryNodeChildBuffer(
 }
 
 /** Get string content from a child node by tag */
-export function getBinaryNodeChildString(
-  node: BinaryNode,
-  childTag: string,
-): string | undefined {
+export function getBinaryNodeChildString(node: BinaryNode, childTag: string): string | undefined {
   const child = findChildNode(node, childTag)?.content;
   if (Buffer.isBuffer(child) || child instanceof Uint8Array) {
     return Buffer.from(child).toString('utf-8');
@@ -155,9 +147,7 @@ export function binaryNodeToString(
     return tabs + Buffer.from(node).toString('hex');
   }
   if (Array.isArray(node)) {
-    return node
-      .map((x) => '\t'.repeat(indent + 1) + binaryNodeToString(x, indent + 1))
-      .join('\n');
+    return node.map((x) => '\t'.repeat(indent + 1) + binaryNodeToString(x, indent + 1)).join('\n');
   }
 
   const children = binaryNodeToString(node.content as any, indent + 1);
@@ -166,9 +156,7 @@ export function binaryNodeToString(
     .map(([k, v]) => `${k}='${v}'`)
     .join(' ');
   const tag = `<${node.tag} ${attrStr}`;
-  const content = children
-    ? `>\n${children}\n${tabs}</${node.tag}>`
-    : '/>';
+  const content = children ? `>\n${children}\n${tabs}</${node.tag}>` : '/>';
 
   return tag + content;
 }

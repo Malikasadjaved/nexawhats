@@ -7,8 +7,59 @@
 import { createHash } from 'node:crypto';
 import { jidDecode } from '../binary/jid.js';
 import type { AuthenticationCreds } from '../types/auth.js';
+import type { WAVersion } from '../types/socket.js';
 import { KEY_BUNDLE_TYPE } from '../utils/crypto.js';
 import { proto } from './index.js';
+
+/** WA version type — [major, minor, build]. */
+export type { WAVersion };
+
+// ── Version fetching ────────────────────────────────────────────────────
+
+/** Fetched from Baileys GitHub repo (matches Baileys' approach). */
+let _cachedVersion: WAVersion | null = null;
+
+/**
+ * Fetch the WA Web version from the Baileys GitHub repo — the version the
+ * SDK was built against. Baileys hardcodes `[2, 3000, 1027934701]` in
+ * `Defaults/index.ts`; this fetches it dynamically so we auto-update.
+ *
+ * Mirrors Baileys' `fetchLatestBaileysVersion()` exactly.
+ */
+export async function fetchLatestVersion(force = false): Promise<WAVersion> {
+  if (_cachedVersion && !force) return _cachedVersion;
+
+  try {
+    const url =
+      'https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/index.ts';
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    const resp = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!resp.ok) {
+      throw new Error(`fetchLatestVersion: HTTP ${resp.status}`);
+    }
+    const text = await resp.text();
+    const lines = text.split('\n');
+    const versionLine = lines[6]; // line 7 (0-indexed)
+    const match = versionLine.match(/const version = \[(\d+),\s*(\d+),\s*(\d+)\]/);
+    if (match) {
+      _cachedVersion = [Number(match[1]), Number(match[2]), Number(match[3])] as WAVersion;
+      return _cachedVersion;
+    }
+    throw new Error('fetchLatestVersion: could not parse version from Baileys Defaults');
+  } catch {
+    // Fall back to the pinned default
+    _cachedVersion = [...DEFAULT_VERSION] as WAVersion;
+    return _cachedVersion;
+  }
+}
+
+/** Synchronous getter — returns cached version or the pinned default. */
+export function getLatestVersion(): WAVersion {
+  if (!_cachedVersion) return [...DEFAULT_VERSION] as WAVersion;
+  return _cachedVersion;
+}
 
 /** Config subset needed to build a ClientPayload. Keeps the builders pure. */
 export interface PayloadConfig {

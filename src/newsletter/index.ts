@@ -4,7 +4,7 @@
  *
  * Ported from Baileys' `Socket/newsletter.js` + `Socket/mex.js`.
  */
-import { getBinaryNodeChild, S_WHATSAPP_NET } from '../binary/index.js';
+import { S_WHATSAPP_NET, getBinaryNodeChild } from '../binary/index.js';
 import type { BinaryNode } from '../binary/index.js';
 import { generateMessageId } from '../utils/crypto.js';
 
@@ -66,15 +66,8 @@ export interface NewsletterSocket {
   newsletterMute: (jid: string) => Promise<unknown>;
   newsletterUnmute: (jid: string) => Promise<unknown>;
   newsletterSubscribers: (jid: string) => Promise<unknown>;
-  newsletterMetadata: (
-    type: 'invite' | 'jid',
-    key: string,
-  ) => Promise<NewsletterMetadata | null>;
-  newsletterReactMessage: (
-    jid: string,
-    serverId: string,
-    reaction?: string,
-  ) => Promise<void>;
+  newsletterMetadata: (type: 'invite' | 'jid', key: string) => Promise<NewsletterMetadata | null>;
+  newsletterReactMessage: (jid: string, serverId: string, reaction?: string) => Promise<void>;
   newsletterFetchMessages: (
     jid: string,
     count: number,
@@ -221,17 +214,14 @@ export function makeNewsletterSocket(config: NewsletterSocketConfig): Newsletter
     }
 
     const action = dataPath.startsWith('xwa2_') ? dataPath.slice(5).replace(/_/g, ' ') : dataPath;
-    throw Object.assign(
-      new Error(`Failed to ${action}, unexpected response structure`),
-      { statusCode: 400, data: result },
-    );
+    throw Object.assign(new Error(`Failed to ${action}, unexpected response structure`), {
+      statusCode: 400,
+      data: result,
+    });
   }
 
   /** Internal: apply newsletter metadata updates. */
-  async function newsletterUpdate(
-    jid: string,
-    updates: NewsletterUpdate,
-  ): Promise<unknown> {
+  async function newsletterUpdate(jid: string, updates: NewsletterUpdate): Promise<unknown> {
     const variables = {
       newsletter_id: jid,
       updates: {
@@ -342,12 +332,7 @@ export function makeNewsletterSocket(config: NewsletterSocketConfig): Newsletter
     },
 
     // ── Fetch messages ────────────────────────────────────────────
-    newsletterFetchMessages(
-      jid: string,
-      count: number,
-      since?: number,
-      after?: string,
-    ) {
+    newsletterFetchMessages(jid: string, count: number, since?: number, after?: string) {
       const messageUpdateAttrs: Record<string, string> = {
         count: count.toString(),
       };

@@ -10,6 +10,9 @@ import {
   generateKeyPairSync,
   randomBytes,
 } from 'node:crypto';
+import { createRequire } from 'node:module';
+
+const _require = createRequire(import.meta.url);
 
 /**
  * HKDF (HMAC-based Key Derivation Function) as used by WhatsApp.
@@ -270,8 +273,7 @@ export const Curve = {
     // libsignal's curve.calculateSignature is the Ed25519-on-Curve25519
     // variant WhatsApp uses — identity key signatures + signed pre-keys
     // all go through this. Baileys delegates to the same function.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const curve = require('libsignal/src/curve.js') as {
+    const curve = _require('libsignal/src/curve.js') as {
       calculateSignature(priv: Uint8Array, msg: Uint8Array): Uint8Array;
     };
     return Buffer.from(curve.calculateSignature(privateKey, message));
@@ -282,8 +284,7 @@ export const Curve = {
     message: Buffer | Uint8Array,
     signature: Buffer | Uint8Array,
   ): boolean {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const curve = require('libsignal/src/curve.js') as {
+    const curve = _require('libsignal/src/curve.js') as {
       verifySignature(pub: Uint8Array, msg: Uint8Array, sig: Uint8Array): void;
     };
     try {

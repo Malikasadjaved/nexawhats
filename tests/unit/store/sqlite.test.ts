@@ -55,9 +55,7 @@ describe('SQLiteAuthStore', () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.creds.registrationId).toBe(1234);
     expect(Buffer.isBuffer(loaded!.creds.noiseKey.public)).toBe(true);
-    expect((loaded!.creds.noiseKey.public as Buffer).equals(Buffer.from([1, 2, 3]))).toBe(
-      true,
-    );
+    expect((loaded!.creds.noiseKey.public as Buffer).equals(Buffer.from([1, 2, 3]))).toBe(true);
     expect(loaded!.creds.signedPreKey.keyId).toBe(1);
   });
 
@@ -70,7 +68,9 @@ describe('SQLiteAuthStore', () => {
     const loaded = await store.loadState();
     expect(loaded!.creds.advSecretKey).toBe('abc123==');
     // Keys returned are bound to the store itself, not the input state.
-    await loaded!.keys.set({ 'pre-key': { '1': { public: Buffer.from([1]), private: Buffer.from([2]) } } });
+    await loaded!.keys.set({
+      'pre-key': { '1': { public: Buffer.from([1]), private: Buffer.from([2]) } },
+    });
     expect(store.keyCount).toBe(1);
   });
 
@@ -111,7 +111,7 @@ describe('SQLiteAuthStore', () => {
   it('clear removes all creds and keys', async () => {
     await store.saveCreds(stubCreds());
     await store.setKeys({
-      session: { 'abc': Buffer.from([1]) },
+      session: { abc: Buffer.from([1]) },
     });
 
     await store.clear();

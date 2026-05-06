@@ -89,15 +89,11 @@ export class SQLiteAuthStore implements AuthStore {
       setCreds: this.db.prepare(
         'INSERT INTO credentials (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data',
       ),
-      getKey: this.db.prepare(
-        'SELECT data FROM signal_keys WHERE type = ? AND id = ?',
-      ),
+      getKey: this.db.prepare('SELECT data FROM signal_keys WHERE type = ? AND id = ?'),
       setKey: this.db.prepare(
         'INSERT INTO signal_keys (type, id, data) VALUES (?, ?, ?) ON CONFLICT(type, id) DO UPDATE SET data = excluded.data',
       ),
-      deleteKey: this.db.prepare(
-        'DELETE FROM signal_keys WHERE type = ? AND id = ?',
-      ),
+      deleteKey: this.db.prepare('DELETE FROM signal_keys WHERE type = ? AND id = ?'),
       clearCreds: this.db.prepare('DELETE FROM credentials'),
       clearKeys: this.db.prepare('DELETE FROM signal_keys'),
     };
@@ -130,9 +126,7 @@ export class SQLiteAuthStore implements AuthStore {
   ): Promise<Record<string, SignalDataTypeMap[T]>> {
     const result: Record<string, SignalDataTypeMap[T]> = {};
     for (const id of ids) {
-      const row = this.stmts.getKey.get(type, id) as
-        | { data: string }
-        | undefined;
+      const row = this.stmts.getKey.get(type, id) as { data: string } | undefined;
       if (row) {
         result[id] = decodeAuthValue(row.data) as SignalDataTypeMap[T];
       }
@@ -171,9 +165,7 @@ export class SQLiteAuthStore implements AuthStore {
 
   /** Key count for testing/observability. */
   get keyCount(): number {
-    const row = this.db
-      .prepare('SELECT COUNT(*) as n FROM signal_keys')
-      .get() as { n: number };
+    const row = this.db.prepare('SELECT COUNT(*) as n FROM signal_keys').get() as { n: number };
     return row.n;
   }
 }

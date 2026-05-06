@@ -146,7 +146,8 @@ const silentLogger = {
 // ─── Load shared creds ────────────────────────────────────────────────────────
 function loadCreds(): AuthenticationCreds | null {
   try {
-    return readJsonRevived(resolve(AUTH_CAPTURE_DIR, 'creds.json')) as AuthenticationCreds;
+    const raw = readJsonRevived(resolve(AUTH_CAPTURE_DIR, 'creds.json')) as Record<string, unknown>;
+    return (raw.creds ?? raw) as AuthenticationCreds;
   } catch {
     return null;
   }

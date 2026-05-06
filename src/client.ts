@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Logger } from 'pino';
 import type { BinaryNode } from './binary/index.js';
-import { isJidGroup, jidNormalizedUser } from './binary/jid.js';
+import { S_WHATSAPP_NET, isJidGroup, jidNormalizedUser } from './binary/jid.js';
 import { connectOnce } from './client/connect.js';
 import { type GroupOperations, makeGroupOperations } from './groups/index.js';
 import {
@@ -19,13 +19,14 @@ import { HealthServer, type HealthSnapshot, NexaWhatsMetrics } from './observabi
 import {
   DEFAULT_BROWSER,
   DEFAULT_VERSION,
+  fetchLatestVersion,
   generateLoginNode,
   generateRegistrationNode,
 } from './proto/payload.js';
 import { MessageQueue } from './queue/index.js';
 import { type SignalRepository, makeLibSignalRepository } from './signal/libsignal.js';
 import { CircuitBreaker } from './socket/circuit-breaker.js';
-import { processPairSuccess } from './socket/pairing.js';
+import { buildPairDeviceIQ, generatePairingCode, processPairSuccess } from './socket/pairing.js';
 import { ConnectionStateMachine } from './socket/state-machine.js';
 import type { AuthStore } from './store/interface.js';
 import type { AuthenticationCreds, AuthenticationState } from './types/auth.js';
@@ -36,6 +37,7 @@ import type { ClientConfig, ConnectionState } from './types/socket.js';
 import { initAuthCreds } from './utils/auth.js';
 import { Curve, generateMessageId } from './utils/crypto.js';
 import { silentLogger } from './utils/logger.js';
+import { uploadPreKeysToServer } from './utils/pre-key-manager.js';
 
 /**
  * NexaWhats client — the main entry point.
@@ -53,6 +55,7 @@ export class NexaWhatsClient extends EventEmitter {
   private store: AuthStore | null = null;
   private stopReconnect = false;
   private disposeConnect: (() => void) | null = null;
+  private qrTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Live-connection state (populated after successful connect) ──────
   private signalRepository: SignalRepository | null = null;
@@ -134,20 +137,44 @@ export class NexaWhatsClient extends EventEmitter {
       ? this.config.auth.creds
       : (initAuthCreds() as AuthenticationCreds);
 
-    if (!creds.pairingCode && this.config.phoneNumber) {
-      creds.pairingCode = this.config.customPairingCode ?? initAuthCreds().pairingCode;
+    // Keep this.config.auth.creds in sync so external consumers (e.g. re-auth
+    // scripts) can read pairingCode / me after a fresh init.
+    if (this.config.auth.creds !== creds) {
+      this.config.auth.creds = creds;
+    }
+
+    if (!creds.pairingCode && !creds.registered && this.config.phoneNumber) {
+      creds.pairingCode = this.config.customPairingCode ?? generatePairingCode();
       creds.me = {
         id: `${this.config.phoneNumber}@s.whatsapp.net`,
         name: '~',
       };
+      const code = creds.pairingCode;
+      console.log(
+        '\n' +
+        '══════════════════════════════════════════════\n' +
+        '  Pairing code: ' + code + '\n' +
+        '  Enter this code in WhatsApp:\n' +
+        '  Settings → Linked Devices → Link a Device\n' +
+        '══════════════════════════════════════════════\n',
+      );
+      logger.info({ pairingCode: code }, 'pairing code generated — enter on phone');
     }
 
     const browser = (this.config.browser ?? DEFAULT_BROWSER) as readonly [string, string, string];
-    const version = (this.config.version ?? DEFAULT_VERSION) as readonly [number, number, number];
+    // Fetch latest WA version on every fresh connect — stale version triggers 405
+    let version: readonly [number, number, number];
+    try {
+      version = await fetchLatestVersion();
+    } catch {
+      logger.warn('failed to fetch latest version, using default');
+      version = this.config.version ?? DEFAULT_VERSION;
+    }
     const connectTimeoutMs = this.config.connectTimeoutMs ?? 20_000;
     const keepAliveIntervalMs = this.config.keepAliveIntervalMs ?? 25_000;
 
     const payloadConfig = { version, browser, countryCode: 'US' };
+    const phoneNumber = this.config.phoneNumber;
 
     // ── Shared mutable refs (populated after successful connect) ──
     let sendNodeRef: ((node: BinaryNode) => Promise<void>) | null = null;
@@ -194,6 +221,10 @@ export class NexaWhatsClient extends EventEmitter {
 
         const ephemeralKeyPair = Curve.generateKeyPair();
         let pairSuccessReceived = false;
+        let loginResolve: ((outcome: 'success' | 'failure' | 'pair-success') => void) | null = null;
+        const loginOutcome = new Promise<'success' | 'failure' | 'pair-success'>((resolve) => {
+          loginResolve = resolve;
+        });
 
         const result = await connectOnce({
           creds,
@@ -207,16 +238,68 @@ export class NexaWhatsClient extends EventEmitter {
             if (tag === 'success') {
               logger.info('login success');
               creds.registered = true;
+              // Update LID from server (received on multi-device)
+              if (attrs.lid) {
+                creds.me = { ...creds.me, id: creds.me?.id ?? '', lid: attrs.lid };
+              }
               this.connection.transition('connected');
               this.circuitBreaker.recordSuccess();
+              // Post-login: upload pre-keys + send passive IQ.
+              // Fire-and-forget — the IQ query helper is available
+              // synchronously after connectOnce returns.
+              const sn = result.sendNode;
+              if (sn && creds.me?.id) {
+                const pq = pendingQueries;
+                void (async () => {
+                  try {
+                    await uploadPreKeysToServer(sn, pq, creds, this.config.auth.keys, logger);
+                    this.emit('creds.update', creds);
+                    logger.info('post-login pre-keys uploaded');
+                  } catch (err) {
+                    logger.warn({ err }, 'post-login pre-key upload failed');
+                  }
+                  try {
+                    // Send passive IQ to mark client as active
+                    const activeId = generateMessageId();
+                    const activeIQ: BinaryNode = {
+                      tag: 'iq',
+                      attrs: {
+                        id: activeId,
+                        to: S_WHATSAPP_NET,
+                        type: 'set',
+                        xmlns: 'passive',
+                      },
+                      content: [{ tag: 'active', attrs: {} }],
+                    };
+                    await sn(activeIQ);
+                    logger.info('passive active IQ sent');
+                  } catch {
+                    // best effort
+                  }
+                })();
+              }
+              loginResolve?.('success');
               return;
             }
 
             // ── Login failure ─────────────────────────────────
             if (tag === 'failure') {
               const reason = attrs.reason ?? 'unknown';
+              const reasonCode = Number(reason);
               logger.error({ reason }, 'login failure');
-              throw new Error(`Login failure: ${reason}`);
+              // 401, 403, 405 are fatal — reconnect makes it worse
+              if (reasonCode === 401 || reasonCode === 403 || reasonCode === 405) {
+                this.stopReconnect = true;
+                logger.error({ reasonCode }, 'fatal disconnect — not reconnecting');
+              }
+              this.connection.transition('disconnected');
+              if (this.qrTimer) {
+                clearTimeout(this.qrTimer);
+                this.qrTimer = null;
+              }
+              setTimeout(() => result.dispose(), 0);
+              loginResolve?.('failure');
+              return;
             }
 
             // ── Stream error ──────────────────────────────────
@@ -224,8 +307,21 @@ export class NexaWhatsClient extends EventEmitter {
               const text = Array.isArray(node.content)
                 ? ((node.content[0] as { tag?: string })?.tag ?? 'unknown')
                 : 'unknown';
-              logger.error({ text }, 'stream error');
-              throw new Error(`Stream error: ${text}`);
+              // After pair-success, the server sends a stream error to
+              // force a reconnect — this is normal, not a real error.
+              if (pairSuccessReceived || creds.registered) {
+                logger.debug({ text }, 'stream error after login (expected restart)');
+              } else {
+                logger.error({ text }, 'stream error');
+              }
+              this.connection.transition('disconnected');
+              if (this.qrTimer) {
+                clearTimeout(this.qrTimer);
+                this.qrTimer = null;
+              }
+              setTimeout(() => result.dispose(), 0);
+              loginResolve?.(pairSuccessReceived ? 'pair-success' : 'failure');
+              return;
             }
 
             // ── QR pair-device ────────────────────────────────
@@ -238,6 +334,22 @@ export class NexaWhatsClient extends EventEmitter {
                   (c as { tag?: string }).tag === 'pair-device',
               );
               if (pairDevice) {
+                // Acknowledge the pair-device IQ first — server waits for this
+                // before processing the QR scan. Without it, WhatsApp shows
+                // "couldn't login, rescan QR".
+                result
+                  .sendNode({
+                    tag: 'iq',
+                    attrs: {
+                      to: S_WHATSAPP_NET,
+                      type: 'result',
+                      id: attrs.id,
+                    },
+                  })
+                  .catch((err: unknown) => {
+                    logger.error({ err }, 'pair-device ack failed');
+                  });
+
                 const noiseKeyB64 = Buffer.from(creds.noiseKey.public).toString('base64');
                 const identityKeyB64 = Buffer.from(creds.signedIdentityKey.public).toString(
                   'base64',
@@ -250,17 +362,46 @@ export class NexaWhatsClient extends EventEmitter {
                       content?: unknown;
                     }>)
                   : [];
-                const refNode = pdContent.find((c) => c.tag === 'ref');
+                const refNodes = pdContent.filter((c) => c.tag === 'ref');
 
-                if (refNode) {
-                  const ref = Buffer.isBuffer(refNode.content)
-                    ? refNode.content.toString('utf-8')
-                    : String(refNode.content ?? '');
+                const emitNextQR = () => {
+                  if (!refNodes.length) {
+                    logger.warn('QR refs exhausted');
+                    return;
+                  }
+                  const refNode = refNodes.shift();
+                  const ref = Buffer.isBuffer(refNode!.content)
+                    ? refNode!.content.toString('utf-8')
+                    : String(refNode!.content ?? '');
                   const qr = [ref, noiseKeyB64, identityKeyB64, advB64].join(',');
                   this.emit('connection.update', {
                     qr,
                     connection: this.connection.state,
                   });
+                  if (refNodes.length > 0) {
+                    this.qrTimer = setTimeout(emitNextQR, 20_000);
+                  }
+                };
+                emitNextQR();
+
+                // If phoneNumber is set, send the pairing-code IQ now.
+                // Must happen inside the pair-device event — calling it
+                // earlier (e.g. right after handshake) causes "Connection Closed".
+                if (phoneNumber && creds.pairingCode) {
+                  buildPairDeviceIQ({
+                    phoneNumber,
+                    creds,
+                    browser,
+                  })
+                    .then((pairIQ) => {
+                      return result.sendNode(pairIQ);
+                    })
+                    .then(() => {
+                      logger.info('pairing code IQ sent');
+                    })
+                    .catch((err: unknown) => {
+                      logger.error({ err }, 'buildPairDeviceIQ/send failed');
+                    });
                 }
                 return;
               }
@@ -291,10 +432,16 @@ export class NexaWhatsClient extends EventEmitter {
                     logger.error({ err }, 'pair-success reply failed');
                   });
                   pairSuccessReceived = true;
+                  // Stop QR cycling — device is now paired
+                  if (this.qrTimer) {
+                    clearTimeout(this.qrTimer);
+                    this.qrTimer = null;
+                  }
                 } catch (err) {
                   logger.error({ err }, 'error in pairing');
                   throw err;
                 }
+                loginResolve?.('pair-success');
                 return;
               }
             }
@@ -305,6 +452,7 @@ export class NexaWhatsClient extends EventEmitter {
               if (pending) {
                 clearTimeout(pending.timer);
                 pendingQueries.delete(attrs.id);
+                logger.debug({ id: attrs.id, type: attrs.type, pendingCount: pendingQueries.size }, 'resolved pending IQ query');
                 if (attrs.type === 'error') {
                   pending.reject(new Error(`IQ error (${attrs.id}): ${JSON.stringify(attrs)}`));
                 } else {
@@ -313,6 +461,7 @@ export class NexaWhatsClient extends EventEmitter {
                 return;
               }
               // Unmatched IQ — could be server push; ignore for now
+              logger.debug({ id: attrs.id, type: attrs.type, pendingCount: pendingQueries.size }, 'unmatched IQ received (no pending query)');
               return;
             }
 
@@ -446,16 +595,26 @@ export class NexaWhatsClient extends EventEmitter {
         this.groupOps = makeGroupOperations({ query });
 
         // ── Post-connect ─────────────────────────────────────
-        if (pairSuccessReceived) {
-          logger.info('pairing complete, waiting for reconnect...');
+        logger.info('waiting for login outcome...');
+        const outcome = await loginOutcome;
+        logger.info({ outcome }, 'login outcome received');
+
+        if (outcome === 'pair-success') {
+          logger.info('pairing complete, server will close connection for reconnect...');
           this.connection.transition('reconnecting');
+          // Dispose old transport so the next loop iteration starts fresh
+          setTimeout(() => result.dispose(), 0);
           continue;
         }
 
-        if (this.connection.state !== 'connected') {
-          logger.warn('connect ended without success stanza');
+        if (outcome === 'failure') {
+          logger.error('login/registration failed');
+          this.connection.transition('disconnected');
+          if (this.stopReconnect) return;
+          continue;
         }
 
+        // outcome === 'success' — connection is live
         backoffIdx = 0;
         return;
       } catch (err) {
@@ -480,6 +639,10 @@ export class NexaWhatsClient extends EventEmitter {
   /** Disconnect gracefully. */
   async disconnect(): Promise<void> {
     this.stopReconnect = true;
+    if (this.qrTimer) {
+      clearTimeout(this.qrTimer);
+      this.qrTimer = null;
+    }
     if (this.disposeConnect) {
       this.disposeConnect();
       this.disposeConnect = null;

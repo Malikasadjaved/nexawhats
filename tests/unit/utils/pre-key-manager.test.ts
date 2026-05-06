@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { PreKeyManager, generatePreKeys } from '../../../src/utils/pre-key-manager.js';
 import type { SignalDataSet, SignalKeyStore } from '../../../src/types/auth.js';
+import { PreKeyManager, generatePreKeys } from '../../../src/utils/pre-key-manager.js';
 
-function createMockStore(preKeys: Record<string, { public: Uint8Array; private: Uint8Array }> = {}): {
+function createMockStore(
+  preKeys: Record<string, { public: Uint8Array; private: Uint8Array }> = {},
+): {
   store: SignalKeyStore;
   getWrittenData: () => SignalDataSet[];
 } {
@@ -30,7 +32,9 @@ function createMockStore(preKeys: Record<string, { public: Uint8Array; private: 
 describe('PreKeyManager', () => {
   describe('validateDeletions', () => {
     it('removes deletion markers for keys that do not exist', async () => {
-      const { store } = createMockStore({ '1': { public: new Uint8Array(32), private: new Uint8Array(32) } });
+      const { store } = createMockStore({
+        '1': { public: new Uint8Array(32), private: new Uint8Array(32) },
+      });
       const mgr = new PreKeyManager(store);
 
       const data: SignalDataSet = { 'pre-key': { '1': null, '2': null } };
@@ -60,7 +64,7 @@ describe('PreKeyManager', () => {
       const { store } = createMockStore();
       const mgr = new PreKeyManager(store);
 
-      const data: SignalDataSet = { 'session': { session1: new Uint8Array(10) } };
+      const data: SignalDataSet = { session: { session1: new Uint8Array(10) } };
       await mgr.validateDeletions(data, 'pre-key');
       // Should not throw
     });
@@ -69,7 +73,9 @@ describe('PreKeyManager', () => {
       const { store } = createMockStore();
       const mgr = new PreKeyManager(store);
 
-      const data: SignalDataSet = { 'pre-key': { '3': { public: new Uint8Array(32), private: new Uint8Array(32) } } };
+      const data: SignalDataSet = {
+        'pre-key': { '3': { public: new Uint8Array(32), private: new Uint8Array(32) } },
+      };
       await mgr.validateDeletions(data, 'pre-key');
       // All entries should be preserved
       expect(data['pre-key']!['3']).toBeDefined();

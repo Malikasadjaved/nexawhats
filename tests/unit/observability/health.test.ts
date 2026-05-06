@@ -15,7 +15,10 @@ function stubSnapshot(overrides: Partial<HealthSnapshot> = {}): HealthSnapshot {
   };
 }
 
-async function fetchText(port: number, path: string): Promise<{ status: number; body: string; contentType: string }> {
+async function fetchText(
+  port: number,
+  path: string,
+): Promise<{ status: number; body: string; contentType: string }> {
   const res = await fetch(`http://127.0.0.1:${port}${path}`);
   return {
     status: res.status,

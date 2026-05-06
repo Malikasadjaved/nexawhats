@@ -4,10 +4,7 @@ import type { FullJid, JidString } from '../types/jid.js';
 /**
  * Map a WAJIDDomains enum value to the corresponding server string.
  */
-export function getServerFromDomainType(
-  initialServer: string,
-  domainType?: number,
-): string {
+export function getServerFromDomainType(initialServer: string, domainType?: number): string {
   switch (domainType) {
     case WAJIDDomains.LID:
       return 'lid';

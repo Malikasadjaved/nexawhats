@@ -561,7 +561,9 @@ async function extractImageThumb(
 
   if ('sharp' in lib) {
     const sharp = lib.sharp as (input: Buffer | string) => {
-      resize: (w: number) => { jpeg: (opts: { quality: number }) => { toBuffer: () => Promise<Buffer> } };
+      resize: (w: number) => {
+        jpeg: (opts: { quality: number }) => { toBuffer: () => Promise<Buffer> };
+      };
       metadata: () => Promise<{ width?: number; height?: number }>;
     };
     const img = sharp(bufferOrFilePath);
@@ -588,9 +590,7 @@ async function extractImageThumb(
   return { buffer, original: { width: dimensions.width, height: dimensions.height } };
 }
 
-async function getImageLibrary(): Promise<
-  { sharp: unknown } | { jimp: unknown }
-> {
+async function getImageLibrary(): Promise<{ sharp: unknown } | { jimp: unknown }> {
   const [sharp, jimp] = await Promise.all([
     // Optional dependencies — consumers install sharp or jimp on demand
     (import('sharp') as Promise<unknown>).catch(() => undefined),
@@ -621,9 +621,7 @@ async function extractVideoThumb(
  * Get the duration (in seconds) of an audio buffer, file path, or stream.
  * Dynamically imports `music-metadata`.
  */
-export async function getAudioDuration(
-  buffer: Buffer | string,
-): Promise<number | undefined> {
+export async function getAudioDuration(buffer: Buffer | string): Promise<number | undefined> {
   const musicMetadata = await import('music-metadata');
   const options = { duration: true };
   let metadata: { format: { duration?: number } };
@@ -642,19 +640,12 @@ export async function getAudioDuration(
  * Returns the extension WITHOUT a leading dot (e.g. `jpeg`, `mp4`),
  * or `.jpeg` for location / live-location / product messages.
  */
-export function extensionForMediaMessage(
-  message: Record<string, unknown>,
-): string {
-  const getExt = (mimetype: string): string =>
-    mimetype.split(';')[0]?.split('/')[1] ?? '';
+export function extensionForMediaMessage(message: Record<string, unknown>): string {
+  const getExt = (mimetype: string): string => mimetype.split(';')[0]?.split('/')[1] ?? '';
 
   const type = Object.keys(message)[0] ?? '';
 
-  if (
-    type === 'locationMessage' ||
-    type === 'liveLocationMessage' ||
-    type === 'productMessage'
-  ) {
+  if (type === 'locationMessage' || type === 'liveLocationMessage' || type === 'productMessage') {
     return '.jpeg';
   }
 
