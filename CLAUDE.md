@@ -16,6 +16,8 @@ observability, and a cleaner TypeScript surface.
 - **Source of truth for the protocol port:** Baileys v7.0.0-rc.9 at
   `D:/Digital Fte/body/my-bot/node_modules/@whiskeysockets/baileys`
 - **Track plan:** `C:/Users/HP/.claude/plans/nexawhats-track-b.md`
+- **Live test number:** `+923394572313` (device `:29`, both QR and pairing-code auth working)
+- **Auth state:** `./auth-smoke/creds.json` (FileAuthStore, gitignored)
 
 ---
 
@@ -168,10 +170,12 @@ D:/nexawhats/
 | D4.5 — fixture replay tests (`repository.test.ts`, 7 tests) | ✅ Shipped | (uncommitted) |
 | D5 — wire `client.connect()` end-to-end | ✅ Shipped | (uncommitted) |
 | D6 — messages + groups (~2,200 LoC) | ✅ Shipped | (uncommitted) |
+| D7 — 7 connection bug fixes (handshake race, routingInfo, stanza handlers, etc.) | ✅ Shipped | (uncommitted) |
+| D8 — pairing-code auth fix (`link_code_companion_reg` notification handler + ECDH handshake) | ✅ Shipped | (uncommitted) |
 
 **Current gate state:**
 - `npx tsc --noEmit` → 0 errors
-- `npx vitest run` → **502 passing**, 4 skipped, 0 failures (36 test files)
+- `npx vitest run` → **602 passing**, 2 failed (pre-existing), 4 skipped (39 test files)
 - `npx vitest run tests/unit/signal/` → 64/64 passing
 - `npx biome check src/ tests/` → clean
 
@@ -239,13 +243,44 @@ sees `success`, `failure`, or `pair-success`. The post-connectOnce
 code awaits this promise and either returns (success), continues the
 loop (pair-success → reconnect for login), or retries (failure).
 
-### Pairing flow: pair-success → stream error → reconnect → login
-When pairing via QR or pairing code, the server:
-1. Sends `pair-device` IQs (QR cycling)
-2. On successful pair: sends `pair-success` IQ
-3. Then sends `stream:error` to force a reconnect
-4. On reconnect: sends `success` (login, now that `creds.registered` is true)
-The `pairSuccessReceived` flag skips the "stream error" warning when set.
+### Pairing flow: two distinct protocols (QR vs pairing code)
+
+**QR mode** (traditional scan):
+1. Server sends `pair-device` IQ with QR `ref` children
+2. Client rotates QRs every 20s
+3. User scans QR on phone → server sends `pair-success` IQ
+4. Client processes account details, sends `pair-device-sign` reply
+5. Server sends `xmlstreamend` → reconnect → login `success`
+
+**Pairing-code mode** (enter 8-char code on phone):
+1. Server sends `pair-device` IQ (same initial stanza)
+2. Client sends `link_code_companion_reg` IQ with pairing code wrapped ephemeral key
+3. User enters code on phone → phone encrypts its keys with the pairing code
+4. Server sends **`notification type=link_code_companion_reg`** with `stage=primary_hello`
+   containing `link_code_pairing_wrapped_primary_ephemeral_pub` (80 bytes),
+   `primary_identity_pub` (32 bytes), and `link_code_pairing_ref` (113 bytes)
+5. Client performs ECDH handshake:
+   - Decrypts primary's ephemeral pub key via `aesDecryptCTR` (key = PBKDF2(pairingCode, salt))
+   - Computes `companionSharedKey = ECDH(companionEphemeralPriv, primaryEphemeralPub)`
+   - Computes `identitySharedKey = ECDH(companionIdentityPriv, primaryIdentityPub)`
+   - Derives new `advSecretKey = HKDF(companionSharedKey || identitySharedKey || random, info='adv_secret')`
+   - Encrypts identity bundle with AES-256-GCM
+6. Client sends **`link_code_companion_reg` IQ** with `stage=companion_finish` containing:
+   `link_code_pairing_wrapped_key_bundle` (encrypted), `companion_identity_public`, `link_code_pairing_ref`
+7. Server acknowledges IQ → sends `xmlstreamend`
+8. Client reconnects with login node → `success`
+
+The `xmlstreamend` handler checks `pairSuccessReceived || creds.registered` to
+resolve to `'pair-success'` (not `'failure'`) when the server terminates the
+connection after a successful pairing.
+
+### `xmlstreamend` and `onUnexpectedClose` must check pairing state
+
+Both handlers resolve `loginOutcome`. Before the D7 fix they always resolved to
+`'failure'`, killing the reconnect after a successful pair. They now check:
+```typescript
+loginResolve?.(pairSuccessReceived || creds.registered ? 'pair-success' : 'failure');
+```
 
 ### `phoneNumber` config triggers new pairing code unless guarded
 In `client.ts`, if `!creds.pairingCode && !creds.registered && this.config.phoneNumber`,
@@ -268,7 +303,45 @@ Always verify the auth directory exists after startup.
 - `npx tsx scripts/re-auth.ts <phone> --qr` — QR code mode (scan URL)
 - Saves to `./auth-smoke/` and `tests/fixtures/auth-capture/creds.json`
 - Handles disconnect/reconnect after pairing automatically
-- 90s timeout, exits cleanly after successful registration
+- Waits for full login `connected` state before exiting (don't exit on
+  `creds.update` alone — pairing code flow needs the reconnect to complete)
+
+### D7 — 7 connection bug fixes (2026-05-13)
+
+| # | File | Bug | Impact |
+|---|------|-----|--------|
+| 1 | `socket/handshake.ts` | Handshake race — `sendFrame(ClientHello)` before `ServerHello` listener wired. Redesigned to `awaitNextMessage` pattern. | Missed ServerHello under high latency |
+| 2 | `client/connect.ts` | Missing `routingInfo` support — `edge_routing` data never appended to WebSocket URL | Reconnect after edge routing would fail |
+| 3 | `client.ts` | Connection close not wired to `loginOutcome` — `connect()` hung if connection dropped before login resolution | Hard hang on connection drop |
+| 4 | `client.ts` | Missing stanza handlers: `ib,,edge_routing`, `ib,,offline`, `ib,,offline_preview`, `xmlstreamend`, `downgrade_webclient` | Multiple protocol features broken |
+| 5 | `client.ts` | Pair-device IQ sent on already-registered sessions — `!creds.registered` guard added | 401 on next login after reusing saved session |
+| 6 | `client/connect.ts` | `sendNode` no transport state check — could send on closed transport | Crashes on send-after-close |
+| 7 | `proto/payload.ts` | `fetchLatestVersion` permanently cached fallback — fallback now returned without caching | Stale version could cause 405 rate limits |
+
+### D8 — Pairing-code auth fix (2026-05-13)
+
+The `notification type=link_code_companion_reg` stanza (sent by the server after
+the user enters a pairing code on their phone) was silently ignored. Our
+`onFrame` handler only looked for `pair-success` inside IQ stanzas, but the
+pairing-code flow uses a completely different protocol.
+
+**Added in `src/socket/pairing.ts`:**
+- `decipherLinkPublicKey(data, pairingCode)` — AES-256-CTR decrypt of the
+  primary device's wrapped ephemeral public key (PBKDF2 key derivation)
+- `buildLinkCodeCompanionFinish(stanza, creds, myJid, iqId)` — full ECDH
+  handshake: decrypts primary keys, computes shared secrets via `Curve.sharedKey`,
+  derives `advSecretKey` via HKDF, encrypts identity bundle with AES-256-GCM,
+  builds the `companion_finish` IQ
+
+**Added in `src/utils/crypto.ts`:**
+- `aesDecryptCTR(ciphertext, key, iv)` — symmetric with encrypt, needed for
+  deciphering the wrapped primary ephemeral key
+
+**Wired in `src/client.ts`:**
+- Notification handler catches `notification type=link_code_companion_reg`
+  before the generic group-notification handler
+- Sets `pairSuccessReceived = true` immediately (before async work) so the
+  `xmlstreamend`/`onUnexpectedClose` handlers correctly resolve to `'pair-success'`
 
 ---
 

@@ -1,10 +1,10 @@
 /**
  * Handshake driver unit tests — exercises performHandshake() against
- * mocked NoiseHandler + HandshakeIO to verify protocol sequencing
+ * mocked NoiseHandler + HandshakeTransport to verify protocol sequencing
  * without a live WhatsApp server.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HandshakeIO, PerformHandshakeOptions } from '../../../src/socket/handshake.js';
+import type { HandshakeTransport, PerformHandshakeOptions } from '../../../src/socket/handshake.js';
 import { performHandshake } from '../../../src/socket/handshake.js';
 
 // ── Pino stub ───────────────────────────────────────────────────────
@@ -87,12 +87,54 @@ function mockNoiseHandler(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function mockIO(
+/** Build a mock transport — an EventEmitter-like object with send/on/off. */
+function mockTransport(
   serverReply: Buffer = Buffer.from([0x00, 0x00, 0x05, 0x0a, 0x01, 0x02, 0x03, 0x04]),
+  { delayReply = false } = {},
 ) {
+  const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+  const send = vi.fn().mockResolvedValue(undefined);
+
+  // If delayReply is false, emit the server reply synchronously on next
+  // event-loop tick (mimics real network). If true, the test controls
+  // when the reply arrives.
+  if (!delayReply) {
+    send.mockImplementation(() => {
+      // Only emit on the FIRST send (ClientHello). The second send is
+      // ClientFinish and should NOT emit a second server reply.
+      if (send.mock.calls.length === 1) {
+        // Schedule the reply to arrive after a microtask — after all
+        // synchronous listeners have been wired.
+        queueMicrotask(() => {
+          const frameListeners = listeners['frame'] ?? [];
+          for (const fn of frameListeners) fn(serverReply);
+        });
+      }
+      return Promise.resolve();
+    });
+  }
+
   return {
-    sendFrame: vi.fn().mockResolvedValue(undefined),
-    waitForHandshakeReply: vi.fn().mockResolvedValue(serverReply),
+    send,
+    on(event: string, listener: (...args: unknown[]) => void) {
+      (listeners[event] ??= []).push(listener);
+    },
+    off(event: string, listener: (...args: unknown[]) => void) {
+      const arr = listeners[event];
+      if (arr) {
+        const idx = arr.indexOf(listener);
+        if (idx !== -1) arr.splice(idx, 1);
+      }
+    },
+    listeners,
+    /** Simulate a close during handshake. */
+    emitClose() {
+      for (const fn of listeners['close'] ?? []) fn();
+    },
+    /** Simulate a server reply frame. */
+    emitFrame(buf: Buffer) {
+      for (const fn of listeners['frame'] ?? []) fn(buf);
+    },
   };
 }
 
@@ -102,7 +144,7 @@ function buildOptions(overrides: Partial<PerformHandshakeOptions> = {}): Perform
     creds: { noiseKey: noiseKeyPair },
     ephemeralPublic,
     clientPayload: { passive: true, pull: true },
-    io: mockIO() as unknown as HandshakeIO,
+    transport: mockTransport() as unknown as HandshakeTransport,
     logger: silentLogger,
     ...overrides,
   };
@@ -118,48 +160,76 @@ beforeEach(() => {
 
 describe('performHandshake', () => {
   it('sends ClientHello with ephemeral public key as first frame', async () => {
-    const io = mockIO();
+    const transport = mockTransport();
     const noise = mockNoiseHandler();
 
     await performHandshake(
       buildOptions({
         noise: noise as unknown as PerformHandshakeOptions['noise'],
-        io: io as unknown as HandshakeIO,
+        transport: transport as unknown as HandshakeTransport,
       }),
     );
 
     // ClientHello + ClientFinish = 2 frames sent
-    expect(io.sendFrame).toHaveBeenCalledTimes(2);
-    const firstSend = (io.sendFrame as ReturnType<typeof vi.fn>).mock.calls[0][0] as Buffer;
+    expect(transport.send).toHaveBeenCalledTimes(2);
+    const firstSend = (transport.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as Buffer;
     expect(firstSend.length).toBeGreaterThan(0);
   });
 
   it('calls HandshakeMessage.encode with clientHello containing ephemeral', async () => {
     await performHandshake(buildOptions());
 
-    // First call to HandshakeMessage.encode is ClientHello
     const clientHelloCall = mockHandshakeEncode.mock.calls[0][0];
     expect(clientHelloCall.clientHello).toBeDefined();
     expect(clientHelloCall.clientHello.ephemeral).toBe(ephemeralPublic);
   });
 
-  it('awaits the server reply via waitForHandshakeReply', async () => {
-    const io = mockIO();
-    await performHandshake(buildOptions({ io: io as unknown as HandshakeIO }));
-    expect(io.waitForHandshakeReply).toHaveBeenCalledWith(20_000);
+  it('awaits the server reply via transport frame event', async () => {
+    const transport = mockTransport();
+    const noise = mockNoiseHandler();
+
+    await performHandshake(
+      buildOptions({
+        noise: noise as unknown as PerformHandshakeOptions['noise'],
+        transport: transport as unknown as HandshakeTransport,
+      }),
+    );
+
+    // ClientHello + ClientFinish = 2 sends
+    expect(transport.send).toHaveBeenCalledTimes(2);
   });
 
-  it('passes a custom timeoutMs to waitForHandshakeReply', async () => {
-    const io = mockIO();
-    await performHandshake(buildOptions({ io: io as unknown as HandshakeIO, timeoutMs: 10_000 }));
-    expect(io.waitForHandshakeReply).toHaveBeenCalledWith(10_000);
+  it('rejects when transport emits close during handshake', async () => {
+    const transport = mockTransport(
+      Buffer.from([0x00, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]),
+      { delayReply: true },
+    );
+    const noise = mockNoiseHandler();
+
+    const promise = performHandshake(
+      buildOptions({
+        noise: noise as unknown as PerformHandshakeOptions['noise'],
+        transport: transport as unknown as HandshakeTransport,
+      }),
+    );
+
+    // Emit close before the server reply
+    transport.emitClose();
+
+    await expect(promise).rejects.toThrow(/closed during handshake/);
   });
 
   it('decodes the server frame as a HandshakeMessage', async () => {
-    const serverFrame = Buffer.from('custom-server-frame');
-    const io = mockIO(serverFrame);
+    const serverFrame = Buffer.from([0x00, 0x00, 0x08, 0xc0, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]);
+    const transport = mockTransport(serverFrame);
+    const noise = mockNoiseHandler();
 
-    await performHandshake(buildOptions({ io: io as unknown as HandshakeIO }));
+    await performHandshake(
+      buildOptions({
+        noise: noise as unknown as PerformHandshakeOptions['noise'],
+        transport: transport as unknown as HandshakeTransport,
+      }),
+    );
 
     expect(mockHandshakeDecode).toHaveBeenCalledWith(serverFrame.subarray(3));
   });
@@ -198,21 +268,19 @@ describe('performHandshake', () => {
   });
 
   it('sends ClientFinish as the second frame with encrypted static + payload', async () => {
-    const io = mockIO();
+    const transport = mockTransport();
     const noise = mockNoiseHandler();
 
     await performHandshake(
       buildOptions({
         noise: noise as unknown as PerformHandshakeOptions['noise'],
-        io: io as unknown as HandshakeIO,
+        transport: transport as unknown as HandshakeTransport,
       }),
     );
 
-    // Second sendFrame is ClientFinish
-    const secondSend = (io.sendFrame as ReturnType<typeof vi.fn>).mock.calls[1][0] as Buffer;
+    const secondSend = (transport.send as ReturnType<typeof vi.fn>).mock.calls[1][0] as Buffer;
     expect(secondSend.length).toBeGreaterThan(0);
 
-    // ClientFinish HandshakeMessage encode should include static + payload
     const clientFinishCall = mockHandshakeEncode.mock.calls[1][0];
     expect(clientFinishCall.clientFinish).toBeDefined();
     expect(clientFinishCall.clientFinish.static).toBeDefined();
@@ -228,10 +296,7 @@ describe('performHandshake', () => {
       }),
     );
 
-    // finishInit is called once, and AFTER processHandshake + encrypt
     expect(noise.finishInit).toHaveBeenCalledOnce();
-    // processHandshake resolves before encrypt; encrypt before finishInit.
-    // Verify the call order within the noise mock itself:
     const procIdx = (noise.processHandshake as ReturnType<typeof vi.fn>).mock
       .invocationCallOrder[0];
     const encIdx = (noise.encrypt as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
@@ -240,22 +305,49 @@ describe('performHandshake', () => {
     expect(encIdx).toBeLessThan(finIdx);
   });
 
-  it('ensures ClientHello is sent before awaiting ServerHello', async () => {
-    const io = mockIO();
+  it('sets up frame listener before sending ClientHello', async () => {
+    const transport = mockTransport(
+      Buffer.from([0x00, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]),
+      { delayReply: true },
+    );
     const noise = mockNoiseHandler();
 
-    await performHandshake(
+    // Track whether 'on' was called before 'send'
+    const calls: string[] = [];
+    const origOn = transport.on.bind(transport);
+    const origSend = transport.send.bind(transport);
+
+    transport.on = (event: string, listener: (...args: unknown[]) => void) => {
+      calls.push(`on:${event}`);
+      return origOn(event, listener);
+    };
+    (transport.send as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      calls.push('send');
+      return Promise.resolve();
+    });
+
+    const promise = performHandshake(
       buildOptions({
         noise: noise as unknown as PerformHandshakeOptions['noise'],
-        io: io as unknown as HandshakeIO,
+        transport: transport as unknown as HandshakeTransport,
       }),
     );
 
-    // The first sendFrame invocation (ClientHello) must precede
-    // waitForHandshakeReply in invocation order.
-    const sendIdx = (io.sendFrame as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
-    const waitIdx = (io.waitForHandshakeReply as ReturnType<typeof vi.fn>).mock
-      .invocationCallOrder[0];
-    expect(sendIdx).toBeLessThan(waitIdx);
+    // Emit the frame to resolve the handshake
+    queueMicrotask(() => {
+      transport.emitFrame(Buffer.from([0x00, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05]));
+    });
+
+    await promise;
+
+    // 'on' for frame/close/error should all be called before first 'send'
+    const firstSendIdx = calls.indexOf('send');
+    const lastOnIdx = Math.max(
+      calls.lastIndexOf('on:frame'),
+      calls.lastIndexOf('on:close'),
+      calls.lastIndexOf('on:error'),
+    );
+    // All listeners must be wired before the first send
+    expect(lastOnIdx).toBeLessThan(firstSendIdx);
   });
 });

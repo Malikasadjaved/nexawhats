@@ -10,7 +10,7 @@ import type { BinaryNode } from '../binary/index.js';
 import { S_WHATSAPP_NET, jidEncode } from '../binary/jid.js';
 import { proto } from '../proto/index.js';
 import type { AuthenticationCreds } from '../types/auth.js';
-import { aesEncryptCTR, generateRandomBytes, hmacSign } from '../utils/crypto.js';
+import { aesDecryptCTR, aesEncryptCTR, aesEncryptGCM, Curve, generateRandomBytes, hkdf, hmacSign } from '../utils/crypto.js';
 
 const _require = createRequire(import.meta.url);
 
@@ -374,4 +374,165 @@ function createSignalIdentityField(
     identifier: { name: wid, deviceId: 0 },
     identifierKey: generateSignalPubKeyForVerify(accountSignatureKey),
   };
+}
+
+// ── Pairing-code notification handler ──────────────────────────────────
+
+/**
+ * Decipher the primary device's ephemeral public key from the
+ * `link_code_pairing_wrapped_primary_ephemeral_pub` buffer.
+ *
+ * The phone encrypts its ephemeral public key with the pairing code:
+ *   salt(32) || iv(16) || AES-256-CTR(pubkey, derivedKey, iv)
+ *
+ * Ported from Baileys' `decipherLinkPublicKey` in messages-recv.js.
+ */
+async function decipherLinkPublicKey(
+  data: Buffer,
+  pairingCode: string,
+): Promise<Buffer> {
+  const salt = data.subarray(0, 32);
+  const secretKey = await derivePairingCodeKey(pairingCode, salt);
+  const iv = data.subarray(32, 48);
+  const payload = data.subarray(48, 80);
+  return aesDecryptCTR(payload, secretKey, iv);
+}
+
+/**
+ * Complete the pairing-code flow in response to a
+ * `notification type=link_code_companion_reg` stanza.
+ *
+ * This is the ECDH handshake: the primary (phone) has sent its ephemeral
+ * and identity public keys, wrapped with the pairing code. We decrypt
+ * them, compute shared keys, derive a new advSecret, and reply with a
+ * `link_code_companion_reg` IQ at `stage=companion_finish`.
+ *
+ * Ported from Baileys' messages-recv.js `link_code_companion_reg` case.
+ */
+export async function buildLinkCodeCompanionFinish(
+  stanza: BinaryNode,
+  creds: Pick<
+    AuthenticationCreds,
+    'pairingCode' | 'pairingEphemeralKeyPair' | 'signedIdentityKey' | 'advSecretKey'
+  >,
+  myJid: string,
+  iqId: string,
+): Promise<{ node: BinaryNode; advSecretKey: string }> {
+  const notifNode = findChild(stanza, 'link_code_companion_reg');
+  if (!notifNode) throw new Error('link_code_companion_reg: missing child node');
+
+  const ref = toRequiredBuffer(getChildContent(notifNode, 'link_code_pairing_ref'));
+  const primaryIdentityPub = toRequiredBuffer(
+    getChildContent(notifNode, 'primary_identity_pub'),
+  );
+  const wrappedPrimaryEphemeralPub = toRequiredBuffer(
+    getChildContent(notifNode, 'link_code_pairing_wrapped_primary_ephemeral_pub'),
+  );
+
+  if (!creds.pairingCode) {
+    throw new Error('link_code_companion_reg: missing pairingCode in creds');
+  }
+
+  // 1. Decipher the primary's ephemeral public key
+  const codePairingPublicKey = await decipherLinkPublicKey(
+    wrappedPrimaryEphemeralPub,
+    creds.pairingCode,
+  );
+
+  // 2. ECDH: companion ephemeral private × primary ephemeral public
+  const companionSharedKey = Curve.sharedKey(
+    creds.pairingEphemeralKeyPair.private,
+    codePairingPublicKey,
+  );
+
+  // 3. Random values for key derivation
+  const random = generateRandomBytes(32);
+  const linkCodeSalt = generateRandomBytes(32);
+
+  // 4. HKDF to derive the bundle encryption key
+  const linkCodePairingExpanded = hkdf(companionSharedKey, 32, {
+    salt: linkCodeSalt,
+    info: 'link_code_pairing_key_bundle_encryption_key',
+  });
+
+  // 5. Encrypt the identity bundle
+  const encryptPayload = Buffer.concat([
+    Buffer.from(creds.signedIdentityKey.public),
+    primaryIdentityPub,
+    random,
+  ]);
+  const encryptIv = generateRandomBytes(12);
+  const encrypted = aesEncryptGCM(encryptPayload, linkCodePairingExpanded, encryptIv, Buffer.alloc(0));
+  const encryptedPayload = Buffer.concat([linkCodeSalt, encryptIv, encrypted]);
+
+  // 6. ECDH: companion identity private × primary identity public
+  const identitySharedKey = Curve.sharedKey(
+    creds.signedIdentityKey.private,
+    primaryIdentityPub,
+  );
+
+  // 7. Derive new advSecret
+  const identityPayload = Buffer.concat([companionSharedKey, identitySharedKey, random]);
+  const advSecretKey = (await hkdfAsync(identityPayload, 32, { info: 'adv_secret' })).toString('base64');
+
+  // 8. Build the companion_finish IQ (caller sends and awaits response)
+  const node: BinaryNode = {
+    tag: 'iq',
+    attrs: {
+      to: S_WHATSAPP_NET,
+      type: 'set',
+      id: iqId,
+      xmlns: 'md',
+    },
+    content: [
+      {
+        tag: 'link_code_companion_reg',
+        attrs: {
+          jid: myJid,
+          stage: 'companion_finish',
+        },
+        content: [
+          {
+            tag: 'link_code_pairing_wrapped_key_bundle',
+            attrs: {},
+            content: encryptedPayload,
+          },
+          {
+            tag: 'companion_identity_public',
+            attrs: {},
+            content: creds.signedIdentityKey.public,
+          },
+          {
+            tag: 'link_code_pairing_ref',
+            attrs: {},
+            content: ref,
+          },
+        ],
+      },
+    ],
+  };
+
+  return { node, advSecretKey };
+}
+
+// ── Internal helpers (additions) ───────────────────────────────────────
+
+function toRequiredBuffer(data: unknown): Buffer {
+  if (data === undefined || data === null) {
+    throw new Error('Invalid buffer: missing required data');
+  }
+  return Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+}
+
+function getChildContent(node: BinaryNode, childTag: string): unknown {
+  const child = findChild(node, childTag);
+  return child?.content;
+}
+
+async function hkdfAsync(
+  ikm: Buffer,
+  length: number,
+  options: { salt?: Buffer | Uint8Array; info?: string },
+): Promise<Buffer> {
+  return hkdf(ikm, length, options);
 }

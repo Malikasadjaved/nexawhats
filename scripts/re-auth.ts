@@ -48,8 +48,14 @@ async function main(): Promise<void> {
 
   // Simple console logger so we can see connection errors
   const logger: Logger = {
-    info: (obj: unknown, msg?: string) => console.log('[INFO]', msg ?? obj),
-    warn: (obj: unknown, msg?: string) => console.warn('[WARN]', msg ?? obj),
+    info: (obj: unknown, msg?: string) => {
+      const detail = msg && typeof obj === 'object' && obj !== null ? ' ' + JSON.stringify(obj) : '';
+      console.log('[INFO]', msg ?? obj, detail);
+    },
+    warn: (obj: unknown, msg?: string) => {
+      const detail = msg && typeof obj === 'object' && obj !== null ? ' ' + JSON.stringify(obj) : '';
+      console.warn('[WARN]', msg ?? obj, detail);
+    },
     error: (obj: unknown, msg?: string) => {
       const o = obj as Record<string, unknown>;
       const detail = o.reason ?? o.err ?? o.text ?? '';
@@ -169,11 +175,9 @@ async function main(): Promise<void> {
     if (me?.id && (credsObj.registered as boolean)) {
       log('Registration complete — credentials saved.');
       log(`File: ${OUT_FILE}`);
-      pairingDone = true;
-      setTimeout(() => {
-        client.disconnect().catch(() => {});
-        process.exit(0);
-      }, 2000);
+      // Don't exit here — the server will close the connection and the
+      // client will reconnect with a login node. Wait for the 'connected'
+      // event instead.
     }
   });
 

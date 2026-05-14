@@ -49,9 +49,8 @@ export async function fetchLatestVersion(force = false): Promise<WAVersion> {
     }
     throw new Error('fetchLatestVersion: could not parse version from Baileys Defaults');
   } catch {
-    // Fall back to the pinned default
-    _cachedVersion = [...DEFAULT_VERSION] as WAVersion;
-    return _cachedVersion;
+    // Do NOT cache the fallback — next call should retry.
+    return [...DEFAULT_VERSION] as WAVersion;
   }
 }
 

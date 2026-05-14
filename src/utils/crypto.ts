@@ -151,6 +151,16 @@ export function aesEncryptCTR(
   return Buffer.concat([cipher.update(plaintext), cipher.final()]);
 }
 
+/** AES-256-CTR decrypt. Symmetric with encrypt — same operation. */
+export function aesDecryptCTR(
+  ciphertext: Buffer | Uint8Array,
+  key: Buffer | Uint8Array,
+  iv: Buffer | Uint8Array,
+): Buffer {
+  const decipher = createDecipheriv('aes-256-ctr', key, iv);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
 /** HMAC-SHA256. */
 export function hmacSha256(key: Buffer, data: Buffer): Buffer {
   return createHmac('sha256', key).update(data).digest();

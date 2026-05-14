@@ -53,7 +53,7 @@ export {
 } from './socket/noise.js';
 export {
   performHandshake,
-  type HandshakeIO,
+  type HandshakeTransport,
   type PerformHandshakeOptions,
 } from './socket/handshake.js';
 export {

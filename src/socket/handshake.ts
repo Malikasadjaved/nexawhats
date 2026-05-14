@@ -14,20 +14,14 @@ import type { RawKeyPair } from '../utils/crypto.js';
 import type { NoiseHandler, NoiseHandshakeMessage } from './noise.js';
 
 /**
- * Drives the handshake. Sends ClientHello, awaits the single raw
- * pre-handshake frame that contains ServerHello, derives keys, sends
- * ClientFinish, and calls `noise.finishInit()`. After resolution the
- * caller can start pumping encrypted frames.
- *
- * `sendFrame` writes a framed payload (already wrapped by
- * `noise.encodeFrame`) to the wire. `waitForFrame` returns a promise
- * that resolves with the next buffer the transport emits — the caller
- * is expected to hook this into whatever event plumbing it has.
+ * Minimal transport interface — the caller must provide a send function
+ * and an EventEmitter-like object that emits 'frame' (Buffer) and
+ * 'close' / 'error' events during the handshake window.
  */
-export interface HandshakeIO {
-  sendFrame(frame: Buffer): Promise<void>;
-  /** Resolves with the next raw pre-handshake frame (ServerHello). */
-  waitForHandshakeReply(timeoutMs: number): Promise<Buffer>;
+export interface HandshakeTransport {
+  send(frame: Buffer): Promise<void>;
+  on(event: 'frame' | 'close' | 'error', listener: (...args: any[]) => void): void;
+  off(event: 'frame' | 'close' | 'error', listener: (...args: any[]) => void): void;
 }
 
 export interface PerformHandshakeOptions {
@@ -35,29 +29,30 @@ export interface PerformHandshakeOptions {
   creds: Pick<AuthenticationCreds, 'noiseKey'>;
   /**
    * Public half of the ephemeral keypair the NoiseHandler was built with.
-   * Baileys uses a fresh per-connection ephemeral for ClientHello; the
-   * long-lived `creds.noiseKey` is only used as the static key via
-   * `processHandshake`. The caller (`connect.ts`) generates this pair
-   * and wires both into the handler and this call.
    */
   ephemeralPublic: Buffer | Uint8Array;
   /** ClientPayload protobuf message (from generateLogin/RegistrationNode). */
   clientPayload: unknown;
-  io: HandshakeIO;
+  /** The open transport. */
+  transport: HandshakeTransport;
   logger: Logger;
   timeoutMs?: number;
 }
 
+/**
+ * Drives the handshake. Sets up the ServerHello listener BEFORE sending
+ * the ClientHello (matching Baileys' awaitNextMessage pattern), then
+ * processes the handshake and sends ClientFinish.
+ */
 export async function performHandshake({
   noise,
   creds,
   ephemeralPublic,
   clientPayload,
-  io,
+  transport,
   logger,
   timeoutMs = 20_000,
 }: PerformHandshakeOptions): Promise<void> {
-  logger.trace('sending ClientHello');
   // biome-ignore lint/suspicious/noExplicitAny: proto runtime types
   const HandshakeMessage = (proto as any).HandshakeMessage;
   // biome-ignore lint/suspicious/noExplicitAny: proto runtime types
@@ -67,17 +62,68 @@ export async function performHandshake({
     clientHello: { ephemeral: ephemeralPublic },
   }).finish();
 
-  await io.sendFrame(noise.encodeFrame(clientHello));
+  // ── Set up ServerHello listener BEFORE sending ClientHello ──────
+  // This matches Baileys' awaitNextMessage() pattern: listeners are
+  // wired synchronously, then the send happens. If the server responds
+  // between the send resolving and the next microtask, the listener is
+  // already in place.
+  const serverFrame = await new Promise<Buffer>((resolve, reject) => {
+    let settled = false;
 
-  logger.trace('awaiting ServerHello');
-  const serverFrame = await io.waitForHandshakeReply(timeoutMs);
+    const onFrame = (buf: Buffer): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(buf);
+    };
 
-  // The raw WebSocket frame includes a 3-byte noise length prefix
-  // (big-endian uint24 payload length at bytes 0-2). Strip it before
-  // protobuf decoding — same as noise.decodeFrame's subarray(3, size+3).
+    const onClose = (): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('Transport closed during handshake'));
+    };
+
+    const onError = (err: Error): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(`ServerHello timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      transport.off('frame', onFrame);
+      transport.off('close', onClose);
+      transport.off('error', onError);
+    };
+
+    transport.on('frame', onFrame);
+    transport.on('close', onClose);
+    transport.on('error', onError);
+
+    // Send ClientHello AFTER listeners are in place
+    logger.trace('sending ClientHello');
+    transport.send(noise.encodeFrame(clientHello)).catch((err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    });
+  });
+
+  logger.trace('ServerHello received');
+
+  // Strip the 3-byte noise length prefix from the raw WebSocket frame
   const serverPayload = serverFrame.subarray(3);
 
-  // ServerHello is a HandshakeMessage; decode it.
   const handshake = HandshakeMessage.decode(serverPayload) as NoiseHandshakeMessage;
   if (!handshake.serverHello) {
     throw new Error('handshake reply missing serverHello');
@@ -93,7 +139,7 @@ export async function performHandshake({
     clientFinish: { static: keyEnc, payload: payloadEnc },
   }).finish();
 
-  await io.sendFrame(noise.encodeFrame(clientFinish));
+  await transport.send(noise.encodeFrame(clientFinish));
 
   logger.trace('finishInit');
   await noise.finishInit();

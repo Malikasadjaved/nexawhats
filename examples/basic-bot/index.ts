@@ -166,6 +166,18 @@ async function main(): Promise<void> {
   console.log('bot online');
   console.log('health endpoint: http://localhost:9101/health');
   console.log('metrics endpoint: http://localhost:9101/metrics');
+
+  // Test: send a message to self to force the phone to update device list
+  try {
+    const selfJid = client.config.auth.creds.me?.id?.replace(/:\d+@/, '@') ?? '';
+    if (selfJid) {
+      console.log(`[TEST] Sending test ping to self: ${selfJid}`);
+      const result = await client.send(selfJid, { text: 'nexawhats self-ping' });
+      console.log('[TEST] Send result:', result ? JSON.stringify(result).slice(0, 200) : '(no result)');
+    }
+  } catch (err) {
+    console.error('[TEST] Send failed:', err);
+  }
 }
 
 main().catch((err) => {

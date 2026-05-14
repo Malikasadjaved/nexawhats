@@ -9,7 +9,7 @@ import type { Logger } from 'pino';
 import { encodeBinaryNode } from '../binary/encoder.js';
 import type { BinaryNode } from '../binary/index.js';
 import { S_WHATSAPP_NET } from '../binary/jid.js';
-import { type HandshakeIO, performHandshake } from '../socket/handshake.js';
+import { performHandshake } from '../socket/handshake.js';
 import { type KeepAliveController, createKeepAlive } from '../socket/keepalive.js';
 import { type NoiseHandler, makeNoiseHandler } from '../socket/noise.js';
 import { WsTransport } from '../socket/transport.js';
@@ -21,7 +21,7 @@ import { type RawKeyPair, generateMessageId } from '../utils/crypto.js';
 export const DEFAULT_WA_URL = 'wss://web.whatsapp.com/ws/chat';
 
 /** Default keepalive interval (matches Baileys). */
-const DEFAULT_KEEP_ALIVE_INTERVAL_MS = 25_000;
+const DEFAULT_KEEP_ALIVE_INTERVAL_MS = 30_000;
 
 // ── Options ─────────────────────────────────────────────────────────
 
@@ -47,8 +47,10 @@ export interface ConnectOnceOptions {
   version: WAVersion;
   /** Connection timeout in ms (default 20_000). */
   connectTimeoutMs?: number;
-  /** Keep-alive interval in ms (default 25_000). */
+  /** Keep-alive interval in ms (default 30_000). */
   keepAliveIntervalMs?: number;
+  /** Called when the transport closes unexpectedly (keepalive timeout, server close). */
+  onUnexpectedClose?: (reason: string) => void;
 }
 
 // ── Result ──────────────────────────────────────────────────────────
@@ -77,53 +79,35 @@ export async function connectOnce({
   logger,
   connectTimeoutMs = 20_000,
   keepAliveIntervalMs = DEFAULT_KEEP_ALIVE_INTERVAL_MS,
+  onUnexpectedClose,
 }: ConnectOnceOptions): Promise<ConnectOnceResult> {
+  // Append routingInfo to URL if present (matches Baileys: edge_routing
+  // supplies routing info that must be sent on reconnect).
+  let effectiveUrl = waUrl;
+  if (creds.routingInfo) {
+    const sep = waUrl.includes('?') ? '&' : '?';
+    effectiveUrl = `${waUrl}${sep}ED=${creds.routingInfo.toString('base64url')}`;
+  }
+
   const transport = new WsTransport();
 
   // ── 1. Open WebSocket ────────────────────────────────────────────
-  logger.info({ url: waUrl }, 'connecting');
-  await transport.connect(waUrl, { connectTimeoutMs });
+  logger.info({ url: effectiveUrl }, 'connecting');
+  await transport.connect(effectiveUrl, { connectTimeoutMs });
 
   // ── 2. Noise handshake ───────────────────────────────────────────
   const noise = makeNoiseHandler({
     keyPair: ephemeralKeyPair,
     logger,
+    routingInfo: creds.routingInfo,
   });
-
-  // Build handshake IO over the transport.
-  // `waitForHandshakeReply` captures the SINGLE raw ServerHello frame
-  // that arrives between ClientHello and ClientFinish.
-  const handshakeIO: HandshakeIO = {
-    sendFrame: (frame: Buffer) => transport.send(frame),
-    waitForHandshakeReply: (timeoutMs: number) =>
-      new Promise<Buffer>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          transport.off('frame', onRawFrame);
-          reject(new Error(`ServerHello timeout after ${timeoutMs}ms`));
-        }, timeoutMs);
-
-        const onRawFrame = (buf: Buffer): void => {
-          clearTimeout(timer);
-          transport.off('frame', onRawFrame);
-          resolve(buf);
-        };
-
-        transport.once('frame', onRawFrame);
-        // Also handle transport errors during the wait.
-        transport.once('error', (err: Error) => {
-          clearTimeout(timer);
-          transport.off('frame', onRawFrame);
-          reject(err);
-        });
-      }),
-  };
 
   await performHandshake({
     noise,
     creds: { noiseKey: creds.noiseKey },
     ephemeralPublic: ephemeralKeyPair.public,
     clientPayload,
-    io: handshakeIO,
+    transport,
     logger,
     timeoutMs: connectTimeoutMs,
   });
@@ -131,14 +115,10 @@ export async function connectOnce({
   logger.info('handshake complete');
 
   // ── 3. Wire frame pump (post-handshake, decoded BinaryNodes) ─────
-  // After the handshake, every frame from the transport goes through
-  // noise.decodeFrame — which decrypts + decodes into BinaryNodes.
   transport.on('frame', (buf: Buffer) => {
     noise
       .decodeFrame(buf, (node) => {
         if (Buffer.isBuffer(node)) {
-          // Pre-handshake raw frames shouldn't arrive after handshake,
-          // but handle gracefully.
           logger.trace({ len: node.length }, 'unexpected raw frame post-handshake');
           return;
         }
@@ -149,11 +129,24 @@ export async function connectOnce({
       });
   });
 
-  // ── 4. Keepalive ────────────────────────────────────────────────
+  // ── 4. Mark connection as failed when transport closes ───────────
+  let closeReported = false;
+  transport.on('close', () => {
+    if (!closeReported) {
+      closeReported = true;
+      onUnexpectedClose?.('Transport closed');
+    }
+  });
+
+  // ── 5. Keepalive ────────────────────────────────────────────────
   const keepAlive = createKeepAlive({
     logger,
     keepAliveIntervalMs,
     sendPing: async () => {
+      if (!transport.isOpen) {
+        logger.warn('keepalive ping skipped — transport not open');
+        return;
+      }
       const pingNode: BinaryNode = {
         tag: 'iq',
         attrs: {
@@ -170,7 +163,9 @@ export async function connectOnce({
     },
     onConnectionLost: (reason: string) => {
       logger.warn({ reason }, 'connection lost — keepalive timeout');
+      closeReported = true;
       transport.close(1001, reason);
+      onUnexpectedClose?.(reason);
     },
   });
 
@@ -182,14 +177,17 @@ export async function connectOnce({
 
   keepAlive.start();
 
-  // ── 5. sendNode helper ───────────────────────────────────────────
+  // ── 6. sendNode helper ───────────────────────────────────────────
   const sendNode = async (node: BinaryNode): Promise<void> => {
+    if (!transport.isOpen) {
+      throw new Error('Cannot send — transport is not open');
+    }
     const encoded = encodeBinaryNode(node);
     const framed = noise.encodeFrame(encoded);
     await transport.send(framed);
   };
 
-  // ── 6. Disposer ──────────────────────────────────────────────────
+  // ── 7. Disposer ──────────────────────────────────────────────────
   const dispose = (): void => {
     keepAlive.stop();
     transport.close(1000, 'client disconnect');
