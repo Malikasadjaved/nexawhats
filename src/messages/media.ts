@@ -591,11 +591,14 @@ async function extractImageThumb(
 }
 
 async function getImageLibrary(): Promise<{ sharp: unknown } | { jimp: unknown }> {
-  const [sharp, jimp] = await Promise.all([
+  const [sharpMod, jimpMod] = await Promise.all([
     // Optional dependencies — consumers install sharp or jimp on demand
-    (import('sharp') as Promise<unknown>).catch(() => undefined),
-    (import('jimp') as Promise<unknown>).catch(() => undefined),
+    (import('sharp') as Promise<{ default: unknown } | undefined>).catch(() => undefined),
+    (import('jimp') as Promise<{ default?: { Jimp: unknown } } | undefined>).catch(() => undefined),
   ]);
+  // ESM dynamic imports return { default: ... } — unwrap the default export
+  const sharp = sharpMod?.default ?? sharpMod;
+  const jimp = jimpMod?.default ?? jimpMod;
   if (sharp) return { sharp };
   if (jimp) return { jimp };
   throw new Error('No image processing library available — install `sharp` or `jimp`');

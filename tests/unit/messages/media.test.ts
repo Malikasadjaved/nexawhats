@@ -304,12 +304,25 @@ describe('getAudioDuration', () => {
 // ── Phase 8: generateThumbnail ─────────────────────────────────────────
 
 describe('generateThumbnail', () => {
-  it('throws when no image processing library is installed', async () => {
+  it('generates a base64 thumbnail from a valid image file', async () => {
     const { generateThumbnail } = await import('../../../src/messages/media.js');
 
-    // Neither sharp nor jimp is installed — should throw with a clear message
-    await expect(generateThumbnail('nonexistent.jpg', 'image')).rejects.toThrow(
-      'No image processing library available',
+    // Minimal 1x1 white PNG
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+      'base64',
     );
+    const tmpPath = `${tmpdir()}/nexawhats-test-thumb-${Date.now()}.png`;
+    try {
+      await fs.writeFile(tmpPath, png);
+
+      const result = await generateThumbnail(tmpPath, 'image');
+      expect(result.originalImageDimensions).toBeDefined();
+      expect(result.thumbnail).toBeDefined();
+      expect(typeof result.thumbnail).toBe('string');
+      expect(result.thumbnail!.length).toBeGreaterThan(0);
+    } finally {
+      await fs.unlink(tmpPath).catch(() => {});
+    }
   });
 });

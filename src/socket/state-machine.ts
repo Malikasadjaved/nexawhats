@@ -65,6 +65,8 @@ export class ConnectionStateMachine extends EventEmitter {
     const from = this._state;
     const allowed = TRANSITIONS[from];
 
+    if (from === to) return; // no-op — already in target state
+
     if (!allowed.includes(to)) {
       const error = new Error(
         `Invalid state transition: ${from} → ${to} (allowed: ${allowed.join(', ')})`,

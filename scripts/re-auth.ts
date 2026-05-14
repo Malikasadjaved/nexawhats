@@ -76,8 +76,16 @@ async function main(): Promise<void> {
   let pairingDone = false;
   let fatalSeen = false;
 
+  // Build a proper SignalKeyStore wrapper even for the fallback path.
+  // FileAuthStore has getKeys/setKeys/clear; SignalKeyStore expects get/set/clear.
+  const signalKeys = {
+    get: async (type: string, ids: string[]) => store.getKeys(type, ids),
+    set: async (data: Record<string, unknown>) => store.setKeys(data),
+    clear: async () => store.clear(),
+  };
+
   const config: Record<string, unknown> = {
-    auth: existingState ?? { creds: {}, keys: store },
+    auth: existingState ?? { creds: {}, keys: signalKeys },
     connectTimeoutMs: 60_000,
     keepAliveIntervalMs: 25_000,
     browser: ['Ubuntu', 'Chrome', '22.04.4'],
